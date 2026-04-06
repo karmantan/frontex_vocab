@@ -189,3 +189,23 @@ Substrate;Kunststoff;plastic
 Substrate;sonstiges;other
 Substrate;Papier aus Baumwollfaser;cotton fiber paper|cotton fibre paper
 Substrate;Karte aus Verbundsstoff;composite card
+Security thread;Sicherheitsfaden mit Negativ-Mikroschrift;security thread with negative microprint
+Security thread;Sicherheitsfaden mit Mikroschrift;security thread with microprint
+Security thread;personalisierter optisch variabler Sicherheitsfaden;personalized optically variable security thread|personalised optically variable security thread
+Security thread;optisch variabler Sicherheitsfaden;optically variable security thread
+Security thread;personalisierter holografischer Sicherheitsfaden;personalized holographic security thread|personalised holographic security thread
+Security thread;personalisierter Sicherheitsfaden;personalized security thread|personalised security thread
+Security thread;holografischer Sicherheitsfaden mit Mikroschrift;holographic Security thread with microprint
+Security thread;holografische Sicherheitsfaden;holographic security thread
+Security thread;Fenstersicherheitsfaden mit Kippeffekt;windowed security thread with tilting effect
+Security thread;holografischer Fenstersicherheitsfaden;windowed holographic security thread
+Security thread;Ultraviolettlicht;uv light
+Security thread;durchlicht;transmitted
+Security thread;Infrarotlicht;infrared light|infrared
+Security thread;Streiflicht (Schräglicht);oblique|oblique light
+Security thread;Koaxiallicht;coaxial|co-axial|coaxial light|co-axial light
+Security thread;Normallicht;normal|normal light
+Security thread;Laserlicht;laser
+Security thread;UV-laserlicht;uv laser
+Security thread;Infrarot(IR)-Laserlicht;infrared laser
+Security thread;Iriseinfärbung;rainbow colouring|rainbow coloring|rainbow colour|rainbow color

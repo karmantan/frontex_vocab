@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 import json
 import os
@@ -11,16 +12,25 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-DB_PATH=Path("vocab_quiz.db")
-ADMIN_TOKEN=os.getenv("ADMIN_TOKEN","change-me")
-app=FastAPI(title="Vocabulary Quiz API",version="3.0.0")
-app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
-INDEX_HTML="""<!doctype html>
+
+DB_PATH = Path("vocab_quiz.db")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "change-me")
+
+app = FastAPI(title="Vocabulary Quiz API", version="2.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+INDEX_HTML = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vocabulary Quiz</title>
+<title>Frontex Vocab Quiz</title>
 <style>
 body{font-family:Arial,sans-serif;max-width:980px;margin:40px auto;padding:0 16px;background:#f8fafc;color:#0f172a}
 .card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;margin-bottom:16px}
@@ -28,30 +38,26 @@ input,button,select{font:inherit}
 input,select{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:12px;box-sizing:border-box}
 button{padding:12px 16px;border:0;border-radius:12px;background:#0f172a;color:#fff;cursor:pointer}
 button.secondary{background:#e2e8f0;color:#0f172a}
-.row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .small{font-size:14px;color:#475569}
 .good{color:#15803d;font-weight:700}
 .bad{color:#b91c1c;font-weight:700}
+.badge{display:inline-block;background:#e2e8f0;border-radius:999px;padding:4px 10px;margin-right:8px;font-size:12px}
 .hidden{display:none}
 a{color:#0f172a}
 </style>
 </head>
 <body>
-<h1>Frontex vocab quiz</h1>
+<h1>Frontex Vocab Quiz</h1>
 <div class="card">
-<h2>Deck, category, and mode</h2>
+<h2>Deck and category</h2>
 <div class="row">
 <select id="deckSelect"></select>
 <select id="categorySelect"></select>
-<select id="modeSelect">
-<option value="selected">Selected category</option>
-<option value="mistakes">Mistakes only</option>
-<option value="mixed">Mixed review</option>
-</select>
 </div>
 <div style="margin-top:12px"><button class="secondary" onclick="loadDecks()">refresh</button></div>
 <p class="small" id="deckInfo"></p>
-<p class="small" id="queueSummary">Review queue: 0 items</p>
+<p class="small">Public users can practice existing decks and optionally restrict practice to one category.</p>
 </div>
 <div class="card">
 <h2>Quiz</h2>
@@ -65,10 +71,14 @@ a{color:#0f172a}
 <button class="secondary" onclick="nextItem()">skip</button>
 </div>
 <p id="feedback" style="margin-top:12px"></p>
+<div id="stats"></div>
 </div>
 <p id="quizEmpty" class="small">no public deck available yet.</p>
 </div>
-<p class="small">Admin page: <a href="/admin">/admin</a></p>
+<div class="card">
+<h2>Mistakes in current scope</h2>
+<div id="mistakes" class="small">no data yet.</div>
+</div>
 <script>
 const playerId=localStorage.getItem('player_id')||crypto.randomUUID();
 localStorage.setItem('player_id',playerId);
@@ -82,9 +92,6 @@ async function api(path,options={}){
 function currentCategory(){
   const value=document.getElementById('categorySelect').value;
   return value||null;
-}
-function currentMode(){
-  return document.getElementById('modeSelect').value;
 }
 async function loadDecks(){
   const data=await api('/api/decks');
@@ -102,13 +109,12 @@ async function loadDecks(){
     document.getElementById('quizBox').classList.remove('hidden');
     document.getElementById('quizEmpty').classList.add('hidden');
     await loadCategories();
-    await loadQueueSummary();
     await nextItem();
+    await loadMistakes();
   }else{
     document.getElementById('deckInfo').textContent='';
     document.getElementById('quizBox').classList.add('hidden');
     document.getElementById('quizEmpty').classList.remove('hidden');
-    document.getElementById('queueSummary').textContent='Review queue: 0 items';
   }
 }
 async function loadCategories(){
@@ -128,50 +134,34 @@ async function loadCategories(){
     select.appendChild(opt);
   }
   if([...select.options].some(x=>x.value===previous)){select.value=previous;}
+  document.getElementById('categoryLabel').textContent=select.value?`category: ${select.value}`:'category: all';
 }
 document.getElementById('deckSelect').addEventListener('change',async(e)=>{
   currentDeckId=e.target.value;
   await loadCategories();
-  await loadQueueSummary();
   await nextItem();
+  await loadMistakes();
 });
 document.getElementById('categorySelect').addEventListener('change',async()=>{
-  await loadQueueSummary();
+  document.getElementById('categoryLabel').textContent=currentCategory()?`category: ${currentCategory()}`:'category: all';
   await nextItem();
+  await loadMistakes();
 });
-document.getElementById('modeSelect').addEventListener('change',async()=>{
-  await loadQueueSummary();
-  await nextItem();
-});
-async function loadQueueSummary(){
-  if(!currentDeckId)return;
-  const category=currentCategory();
-  const suffix=category?`&category=${encodeURIComponent(category)}`:'';
-  const data=await api(`/api/decks/${currentDeckId}/mistake_queue/summary?player_id=${encodeURIComponent(playerId)}${suffix}`);
-  const mode=currentMode();
-  if(mode==='selected'){
-    document.getElementById('queueSummary').textContent=`Review queue: ${data.scoped_queue} items in this category, ${data.total_queue} total`;
-  }else if(mode==='mistakes'){
-    document.getElementById('queueSummary').textContent=`Mistakes only: ${data.scoped_queue} items ready for review`;
-  }else{
-    document.getElementById('queueSummary').textContent=`Mixed review: ${data.total_queue} queued mistakes will be mixed into practice`;
-  }
-}
 async function nextItem(){
   if(!currentDeckId)return;
   try{
-    const data=await api(`/api/decks/${currentDeckId}/next`,{method:'POST',body:JSON.stringify({player_id:playerId,current_item_id:currentItem?.item_id||null,category:currentCategory(),mode:currentMode()})});
+    const data=await api(`/api/decks/${currentDeckId}/next`,{method:'POST',body:JSON.stringify({player_id:playerId,current_item_id:currentItem?.item_id||null,category:currentCategory()})});
     currentItem=data;
     document.getElementById('prompt').textContent=data.german;
     document.getElementById('answer').value='';
     document.getElementById('feedback').textContent='';
     document.getElementById('categoryLabel').textContent=`category: ${data.category}`;
+    document.getElementById('stats').innerHTML=`<span class="badge">seen ${data.stats.seen}</span><span class="badge">wrong ${data.stats.wrong}</span><span class="badge">weight ${data.weight.toFixed(2)}</span>`;
     document.getElementById('answer').focus();
   }catch(err){
+    document.getElementById('prompt').textContent='No items found for this category.';
+    document.getElementById('stats').innerHTML='';
     currentItem=null;
-    document.getElementById('prompt').textContent='No items available for this selection.';
-    document.getElementById('categoryLabel').textContent='';
-    document.getElementById('feedback').textContent='';
   }
 }
 async function submitAnswer(){
@@ -179,15 +169,25 @@ async function submitAnswer(){
   const answer=document.getElementById('answer').value;
   const data=await api(`/api/decks/${currentDeckId}/answer`,{method:'POST',body:JSON.stringify({player_id:playerId,item_id:currentItem.item_id,answer})});
   document.getElementById('feedback').innerHTML=data.correct?`<span class="good">correct</span>`:`<span class="bad">wrong</span> — correct answer: ${data.correct_answer}`;
-  await loadQueueSummary();
+  await loadMistakes();
   setTimeout(nextItem,900);
+}
+async function loadMistakes(){
+  if(!currentDeckId)return;
+  const category=currentCategory();
+  const suffix=category?`&category=${encodeURIComponent(category)}`:'';
+  const data=await api(`/api/decks/${currentDeckId}/mistakes?player_id=${encodeURIComponent(playerId)}${suffix}`);
+  const div=document.getElementById('mistakes');
+  if(!data.items.length){div.textContent='no mistake history yet.';return;}
+  div.innerHTML=data.items.map(x=>`<div style="padding:8px 0;border-bottom:1px solid #e2e8f0"><strong>[${x.category}] ${x.german}</strong> → ${x.english}<br>wrong: ${x.wrong}, seen: ${x.seen}, weight: ${x.weight.toFixed(2)}</div>`).join('');
 }
 loadDecks();
 </script>
 </body>
 </html>
 """
-ADMIN_HTML="""<!doctype html>
+
+ADMIN_HTML = """<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -216,7 +216,7 @@ a{color:#0f172a}
 </div>
 <div class="card">
 <h2>Import a deck with categories</h2>
-<p class="small">Recommended format: category;German;English. Example:<br><br>Basics;guten Morgen;good morning<br>Travel;der Bahnhof;train station<br>Travel;Entschuldigung;sorry|excuse me</p>
+<p class="small">Recommended format: save a plain <strong>.txt</strong> file with one item per line using semicolons. Preferred 3-column format: <strong>category;German;English</strong>. Example:<br><br>Basics;guten Morgen;good morning<br>Travel;der Bahnhof;train station<br>Travel;Entschuldigung;sorry|excuse me</p>
 <p class="small">2-column lines are also allowed and will go into the default category <strong>General</strong>: <strong>German;English</strong>.</p>
 <input id="deckName" placeholder="deck name" value="My vocabulary">
 <textarea id="deckText" rows="14" placeholder="Basics;guten Morgen;good morning&#10;Basics;Wie geht's?;how are you?&#10;Travel;der Bahnhof;train station&#10;Travel;Entschuldigung;sorry|excuse me"></textarea>
@@ -230,7 +230,7 @@ a{color:#0f172a}
 <select id="adminCategorySelect"></select>
 <button class="secondary" onclick="loadAdminItems()">load items</button>
 </div>
-<p class="small">Manual weight guide: 0.3 = rare, 1.0 = normal, 2.0 = more frequent, 4.0 = very frequent.</p>
+<p class="small">Manual weight guide: 0.3 = rare, 1.0 = normal, 2.0 = more frequent, 4.0 = very frequent. Final quiz frequency still depends on mistakes and streaks.</p>
 <div style="overflow:auto">
 <table>
 <thead>
@@ -245,6 +245,15 @@ a{color:#0f172a}
 <div class="card">
 <h2>Existing decks and categories</h2>
 <div id="decks" class="small"></div>
+</div>
+<div class="card">
+<h2>Delete a deck</h2>
+<div class="row">
+<select id="deleteDeckSelect"></select>
+<button onclick="deleteDeck()">delete selected deck</button>
+<button class="secondary" onclick="loadDeleteDecks()">refresh list</button>
+</div>
+<p class="small" id="deleteResult"></p>
 </div>
 <p class="small"><a href="/">back to public quiz</a></p>
 <script>
@@ -287,6 +296,7 @@ async function loadAdminDecks(){
   }else{
     document.getElementById('itemTableBody').innerHTML='<tr><td colspan="5" class="small">no decks yet.</td></tr>';
   }
+  await loadDeleteDecks();
 }
 async function loadAdminCategories(){
   const deckId=document.getElementById('adminDeckSelect').value;
@@ -339,6 +349,33 @@ async function saveWeight(itemId){
     alert(`update failed: ${err.message}`);
   }
 }
+async function loadDeleteDecks(){
+  const data=await fetch('/api/decks').then(r=>r.json());
+  const select=document.getElementById('deleteDeckSelect');
+  if(!select)return;
+  select.innerHTML='';
+  for(const deck of data.decks){
+    const opt=document.createElement('option');
+    opt.value=deck.id;
+    opt.textContent=`${deck.name} (${deck.item_count})`;
+    select.appendChild(opt);
+  }
+}
+async function deleteDeck(){
+  const select=document.getElementById('deleteDeckSelect');
+  const deckId=select.value;
+  if(!deckId){return;}
+  const confirmed=confirm('Delete this deck permanently? This also deletes its items and all user progress for it.');
+  if(!confirmed){return;}
+  try{
+    await api(`/api/decks/${deckId}`,{method:'DELETE'});
+    document.getElementById('deleteResult').textContent='deck deleted';
+    await loadAdminDecks();
+    await loadDeckSummaries();
+  }catch(err){
+    document.getElementById('deleteResult').textContent=`delete failed: ${err.message}`;
+  }
+}
 async function loadDeckSummaries(){
   const data=await fetch('/api/decks').then(r=>r.json());
   const div=document.getElementById('decks');
@@ -356,91 +393,121 @@ loadDeckSummaries();
 </body>
 </html>
 """
+
 class ImportDeckRequest(BaseModel):
-    name:str=Field(min_length=1,max_length=200)
-    text:str=Field(min_length=1)
+    name: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1)
+
 class NextRequest(BaseModel):
-    player_id:str=Field(min_length=1,max_length=200)
-    current_item_id:int|None=None
-    category:str|None=None
-    mode:str=Field(default="selected")
+    player_id: str = Field(min_length=1, max_length=200)
+    current_item_id: int | None = None
+    category: str | None = None
+
 class AnswerRequest(BaseModel):
-    player_id:str=Field(min_length=1,max_length=200)
-    item_id:int
-    answer:str
+    player_id: str = Field(min_length=1, max_length=200)
+    item_id: int
+    answer: str
+
 class WeightUpdateRequest(BaseModel):
-    manual_weight:float=Field(ge=0.1,le=20)
+    manual_weight: float = Field(ge=0.1, le=20)
+
 class Settings(BaseModel):
-    wrong_factor:float=0.6
-    streak_decay:float=0.08
-    unseen_boost:float=1.25
-    accuracy_factor:float=0.8
-    min_weight:float=0.15
-DEFAULT_SETTINGS=Settings()
-def now_iso()->str:
+    wrong_factor: float = 0.6
+    streak_decay: float = 0.08
+    unseen_boost: float = 1.25
+    accuracy_factor: float = 0.8
+    min_weight: float = 0.15
+
+DEFAULT_SETTINGS = Settings()
+
+def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-def normalize_text(value:str)->str:
-    return " ".join(value.lower().strip().replace("’","'").replace("`","'").translate(str.maketrans("","", ".!?,;:")).split())
-def expand_german_variants(value:str)->set[str]:
-    forms={normalize_text(value)}
-    rules=[("ä",["ae","a"]),("ö",["oe","o"]),("ü",["ue","u"]),("ß",["ss"]),("ae",["ä","a"]),("oe",["ö","o"]),("ue",["ü","u"]),("ss",["ß"])]
-    changed=True
+
+def normalize_text(value: str) -> str:
+    return " ".join(
+        value.lower()
+        .strip()
+        .replace("’", "'")
+        .replace("`", "'")
+        .translate(str.maketrans("", "", ".!?,;:"))
+        .split()
+    )
+
+def expand_german_variants(value: str) -> set[str]:
+    forms = {normalize_text(value)}
+    rules = [
+        ("ä", ["ae", "a"]),
+        ("ö", ["oe", "o"]),
+        ("ü", ["ue", "u"]),
+        ("ß", ["ss"]),
+        ("ae", ["ä", "a"]),
+        ("oe", ["ö", "o"]),
+        ("ue", ["ü", "u"]),
+        ("ss", ["ß"]),
+    ]
+    changed = True
     while changed:
-        changed=False
-        snapshot=list(forms)
+        changed = False
+        snapshot = list(forms)
         for form in snapshot:
-            for src,repls in rules:
+            for src, repls in rules:
                 if src in form:
                     for repl in repls:
-                        candidate=form.replace(src,repl)
+                        candidate = form.replace(src, repl)
                         if candidate not in forms:
                             forms.add(candidate)
-                            changed=True
+                            changed = True
     return {normalize_text(x) for x in forms}
-def split_answers(value:str)->list[str]:
+
+def split_answers(value: str) -> list[str]:
     return [part.strip() for part in value.split("|") if part.strip()]
-def answer_matches(user_answer:str,accepted_answer:str)->bool:
-    normalized_user=normalize_text(user_answer)
+
+def answer_matches(user_answer: str, accepted_answer: str) -> bool:
+    normalized_user = normalize_text(user_answer)
     return normalized_user in expand_german_variants(accepted_answer)
-def parse_line(line:str)->tuple[str,str,str]|None:
-    line=line.strip()
+
+def parse_line(line: str) -> tuple[str, str, str] | None:
+    line = line.strip()
     if not line:
         return None
     if "\t" in line:
-        parts=[part.strip() for part in line.split("\t")]
-        if len(parts)>=3 and parts[0] and parts[1] and parts[2]:
-            return parts[0],parts[1],"\t".join(parts[2:]).strip()
-        if len(parts)>=2 and parts[0] and parts[1]:
-            return "General",parts[0],"\t".join(parts[1:]).strip()
+        parts = [part.strip() for part in line.split("\t")]
+        if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
+            return parts[0], parts[1], "\t".join(parts[2:]).strip()
+        if len(parts) >= 2 and parts[0] and parts[1]:
+            return "General", parts[0], "\t".join(parts[1:]).strip()
         return None
     if ";" in line:
-        parts=[part.strip() for part in line.split(";")]
-        if len(parts)>=3 and parts[0] and parts[1] and parts[2]:
-            return parts[0],parts[1],";".join(parts[2:]).strip()
-        if len(parts)>=2 and parts[0] and parts[1]:
-            return "General",parts[0],";".join(parts[1:]).strip()
+        parts = [part.strip() for part in line.split(";")]
+        if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
+            return parts[0], parts[1], ";".join(parts[2:]).strip()
+        if len(parts) >= 2 and parts[0] and parts[1]:
+            return "General", parts[0], ";".join(parts[1:]).strip()
         return None
     if "," in line:
-        parts=[part.strip() for part in line.split(",")]
-        if len(parts)>=3 and parts[0] and parts[1] and parts[2]:
-            return parts[0],parts[1],",".join(parts[2:]).strip()
-        if len(parts)>=2 and parts[0] and parts[1]:
-            return "General",parts[0],",".join(parts[1:]).strip()
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
+            return parts[0], parts[1], ",".join(parts[2:]).strip()
+        if len(parts) >= 2 and parts[0] and parts[1]:
+            return "General", parts[0], ",".join(parts[1:]).strip()
         return None
     return None
+
 @contextmanager
 def db():
-    conn=sqlite3.connect(DB_PATH)
-    conn.row_factory=sqlite3.Row
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
-def column_exists(conn:sqlite3.Connection,table_name:str,column_name:str)->bool:
-    rows=conn.execute(f"pragma table_info({table_name})").fetchall()
-    return any(row[1]==column_name for row in rows)
-def init_db()->None:
+
+def column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(f"pragma table_info({table_name})").fetchall()
+    return any(row[1] == column_name for row in rows)
+
+def init_db() -> None:
     with db() as conn:
         conn.executescript("""
         create table if not exists decks(
@@ -466,205 +533,258 @@ def init_db()->None:
             wrong integer not null default 0,
             streak integer not null default 0,
             last_wrong_at text null,
-            in_mistake_queue integer not null default 0,
-            mistake_clear_streak integer not null default 0,
             primary key(player_id,item_id)
         );
         """)
-        if not column_exists(conn,"items","category"):
+        if not column_exists(conn, "items", "category"):
             conn.execute("alter table items add column category text not null default 'General'")
-        if not column_exists(conn,"player_item_stats","in_mistake_queue"):
-            conn.execute("alter table player_item_stats add column in_mistake_queue integer not null default 0")
-        if not column_exists(conn,"player_item_stats","mistake_clear_streak"):
-            conn.execute("alter table player_item_stats add column mistake_clear_streak integer not null default 0")
         conn.execute("create unique index if not exists idx_items_unique on items(deck_id,category,german,english)")
+
 @app.on_event("startup")
-def on_startup()->None:
+def on_startup() -> None:
     init_db()
-def verify_admin_token(x_admin_token:str|None)->None:
-    if not x_admin_token or x_admin_token!=ADMIN_TOKEN:
-        raise HTTPException(status_code=403,detail="Admin token required")
-def get_or_create_stats(conn:sqlite3.Connection,player_id:str,item_id:int)->sqlite3.Row:
-    row=conn.execute("select * from player_item_stats where player_id=? and item_id=?",(player_id,item_id)).fetchone()
+
+def verify_admin_token(x_admin_token: str | None) -> None:
+    if not x_admin_token or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="Admin token required")
+
+def get_or_create_stats(conn: sqlite3.Connection, player_id: str, item_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        "select * from player_item_stats where player_id=? and item_id=?",
+        (player_id, item_id),
+    ).fetchone()
     if row:
         return row
-    conn.execute("insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak) values(?,?,?,?,?,?,?,?,?)",(player_id,item_id,0,0,0,0,None,0,0))
-    return conn.execute("select * from player_item_stats where player_id=? and item_id=?",(player_id,item_id)).fetchone()
-def compute_weight(stat:sqlite3.Row|dict[str,Any],manual_weight:float,settings:Settings=DEFAULT_SETTINGS)->float:
-    seen=stat["seen"] if isinstance(stat,sqlite3.Row) else stat.get("seen",0)
-    correct=stat["correct"] if isinstance(stat,sqlite3.Row) else stat.get("correct",0)
-    wrong=stat["wrong"] if isinstance(stat,sqlite3.Row) else stat.get("wrong",0)
-    streak=stat["streak"] if isinstance(stat,sqlite3.Row) else stat.get("streak",0)
-    accuracy=(correct/seen) if seen else 0.0
-    wrong_boost=1+(wrong*settings.wrong_factor)
-    streak_penalty=max(settings.min_weight,1-(streak*settings.streak_decay))
-    unseen_boost=settings.unseen_boost if seen==0 else 1.0
-    low_accuracy_boost=1+(max(0.0,1-accuracy)*settings.accuracy_factor)
-    return max(settings.min_weight,manual_weight*wrong_boost*streak_penalty*unseen_boost*low_accuracy_boost)
-def compute_effective_weight(stat:sqlite3.Row,manual_weight:float,mode:str)->float:
-    base=compute_weight(stat,manual_weight)
-    if stat["in_mistake_queue"] and mode in {"mistakes","mixed"}:
-        return base*1.5
-    return base
-def fetch_items(conn:sqlite3.Connection,deck_id:int,category:str|None=None)->list[sqlite3.Row]:
-    if category:
-        return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? and category=? order by id asc",(deck_id,category)).fetchall()
-    return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? order by category asc,id asc",(deck_id,)).fetchall()
-def fetch_scope_items(conn:sqlite3.Connection,deck_id:int,player_id:str,category:str|None,mode:str)->list[sqlite3.Row]:
-    selected_items=fetch_items(conn,deck_id,category)
-    if mode=="selected":
-        return selected_items
-    if category:
-        mistake_rows=conn.execute("""
-            select i.id,i.deck_id,i.category,i.german,i.english,i.manual_weight
-            from items i
-            join player_item_stats s on s.item_id=i.id
-            where i.deck_id=? and s.player_id=? and s.in_mistake_queue=1 and i.category=?
-            order by i.category asc,i.id asc
-        """,(deck_id,player_id,category)).fetchall()
-    else:
-        mistake_rows=conn.execute("""
-            select i.id,i.deck_id,i.category,i.german,i.english,i.manual_weight
-            from items i
-            join player_item_stats s on s.item_id=i.id
-            where i.deck_id=? and s.player_id=? and s.in_mistake_queue=1
-            order by i.category asc,i.id asc
-        """,(deck_id,player_id)).fetchall()
-    if mode=="mistakes":
-        return mistake_rows
-    combined={row["id"]:row for row in selected_items}
-    for row in mistake_rows:
-        combined[row["id"]]=row
-    return list(combined.values())
-def weighted_choice(rows:list[sqlite3.Row],stats_by_item:dict[int,sqlite3.Row],mode:str,exclude_item_id:int|None=None)->sqlite3.Row:
-    candidates=[]
+    conn.execute(
+        "insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at) values(?,?,?,?,?,?,?)",
+        (player_id, item_id, 0, 0, 0, 0, None),
+    )
+    return conn.execute(
+        "select * from player_item_stats where player_id=? and item_id=?",
+        (player_id, item_id),
+    ).fetchone()
+
+def compute_weight(stat: sqlite3.Row | dict[str, Any], manual_weight: float, settings: Settings = DEFAULT_SETTINGS) -> float:
+    seen = stat["seen"] if isinstance(stat, sqlite3.Row) else stat.get("seen", 0)
+    correct = stat["correct"] if isinstance(stat, sqlite3.Row) else stat.get("correct", 0)
+    wrong = stat["wrong"] if isinstance(stat, sqlite3.Row) else stat.get("wrong", 0)
+    streak = stat["streak"] if isinstance(stat, sqlite3.Row) else stat.get("streak", 0)
+    accuracy = (correct / seen) if seen else 0.0
+    wrong_boost = 1 + (wrong * settings.wrong_factor)
+    streak_penalty = max(settings.min_weight, 1 - (streak * settings.streak_decay))
+    unseen_boost = settings.unseen_boost if seen == 0 else 1.0
+    low_accuracy_boost = 1 + (max(0.0, 1 - accuracy) * settings.accuracy_factor)
+    return max(settings.min_weight, manual_weight * wrong_boost * streak_penalty * unseen_boost * low_accuracy_boost)
+
+def weighted_choice(rows: list[sqlite3.Row], stats_by_item: dict[int, sqlite3.Row], exclude_item_id: int | None = None) -> sqlite3.Row:
+    candidates: list[tuple[sqlite3.Row, float]] = []
     for row in rows:
-        if exclude_item_id is not None and len(rows)>1 and row["id"]==exclude_item_id:
+        if exclude_item_id is not None and len(rows) > 1 and row["id"] == exclude_item_id:
             continue
-        stat=stats_by_item[row["id"]]
-        weight=compute_effective_weight(stat,row["manual_weight"],mode)
-        candidates.append((row,weight))
+        stat = stats_by_item[row["id"]]
+        weight = compute_weight(stat, row["manual_weight"])
+        candidates.append((row, weight))
     if not candidates:
-        raise HTTPException(status_code=400,detail="No items available")
-    total=sum(weight for _,weight in candidates)
-    threshold=random.random()*total
-    running=0.0
-    for row,weight in candidates:
-        running+=weight
-        if running>=threshold:
+        raise HTTPException(status_code=400, detail="No items available")
+    total = sum(weight for _, weight in candidates)
+    threshold = random.random() * total
+    running = 0.0
+    for row, weight in candidates:
+        running += weight
+        if running >= threshold:
             return row
     return candidates[-1][0]
-@app.get("/",response_class=HTMLResponse)
-def home()->str:
+
+def fetch_items(conn: sqlite3.Connection, deck_id: int, category: str | None = None) -> list[sqlite3.Row]:
+    if category:
+        return conn.execute(
+            "select id,deck_id,category,german,english,manual_weight from items where deck_id=? and category=? order by id asc",
+            (deck_id, category),
+        ).fetchall()
+    return conn.execute(
+        "select id,deck_id,category,german,english,manual_weight from items where deck_id=? order by category asc,id asc",
+        (deck_id,),
+    ).fetchall()
+
+@app.get("/", response_class=HTMLResponse)
+def home() -> str:
     return INDEX_HTML
-@app.get("/admin",response_class=HTMLResponse)
-def admin_home()->str:
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_home() -> str:
     return ADMIN_HTML
+
 @app.get("/api/health")
-def health()->dict[str,str]:
-    return {"status":"ok"}
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
 @app.get("/api/decks")
-def list_decks()->dict[str,Any]:
+def list_decks() -> dict[str, Any]:
     with db() as conn:
-        rows=conn.execute("""
+        rows = conn.execute("""
         select d.id,d.name,d.created_at,count(i.id) as item_count
         from decks d
         left join items i on i.deck_id=d.id
         group by d.id,d.name,d.created_at
         order by d.id desc
         """).fetchall()
-        return {"decks":[dict(row) for row in rows]}
+        return {"decks": [dict(row) for row in rows]}
+
 @app.get("/api/decks/{deck_id}/categories")
-def list_categories(deck_id:int)->dict[str,Any]:
+def list_categories(deck_id: int) -> dict[str, Any]:
     with db() as conn:
-        rows=conn.execute("select distinct category from items where deck_id=? order by category asc",(deck_id,)).fetchall()
-        return {"categories":[row["category"] for row in rows]}
+        rows = conn.execute(
+            "select distinct category from items where deck_id=? order by category asc",
+            (deck_id,),
+        ).fetchall()
+        return {"categories": [row["category"] for row in rows]}
+
 @app.post("/api/decks/import")
-def import_deck(payload:ImportDeckRequest,x_admin_token:str|None=Header(default=None))->dict[str,Any]:
+def import_deck(payload: ImportDeckRequest, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     verify_admin_token(x_admin_token)
-    parsed=[]
+    parsed: list[tuple[str, str, str]] = []
     for line in payload.text.splitlines():
-        item=parse_line(line)
+        item = parse_line(line)
         if item:
             parsed.append(item)
     if not parsed:
-        raise HTTPException(status_code=400,detail="No valid lines found")
+        raise HTTPException(status_code=400, detail="No valid lines found")
     with db() as conn:
-        cur=conn.execute("insert into decks(name,created_at) values(?,?)",(payload.name,now_iso()))
-        deck_id=cur.lastrowid
-        categories=set()
-        for category,german,english in parsed:
-            accepted=json.dumps(split_answers(english),ensure_ascii=False)
-            conn.execute("insert into items(deck_id,category,german,english,accepted_answers,manual_weight,created_at) values(?,?,?,?,?,?,?)",(deck_id,category,german,english,accepted,1.0,now_iso()))
+        cur = conn.execute(
+            "insert into decks(name,created_at) values(?,?)",
+            (payload.name, now_iso()),
+        )
+        deck_id = cur.lastrowid
+        categories: set[str] = set()
+        for category, german, english in parsed:
+            accepted = json.dumps(split_answers(english), ensure_ascii=False)
+            conn.execute(
+                "insert into items(deck_id,category,german,english,accepted_answers,manual_weight,created_at) values(?,?,?,?,?,?,?)",
+                (deck_id, category, german, english, accepted, 1.0, now_iso()),
+            )
             categories.add(category)
-        return {"deck_id":deck_id,"item_count":len(parsed),"category_count":len(categories)}
+        return {"deck_id": deck_id, "item_count": len(parsed), "category_count": len(categories)}
+
 @app.get("/api/decks/{deck_id}/items")
-def list_items(deck_id:int,category:str|None=Query(default=None))->dict[str,Any]:
+def list_items(deck_id: int, category: str | None = Query(default=None)) -> dict[str, Any]:
     with db() as conn:
-        rows=fetch_items(conn,deck_id,category)
-        return {"items":[dict(row) for row in rows]}
+        rows = fetch_items(conn, deck_id, category)
+        return {"items": [dict(row) for row in rows]}
+
 @app.patch("/api/items/{item_id}/weight")
-def update_weight(item_id:int,payload:WeightUpdateRequest,x_admin_token:str|None=Header(default=None))->dict[str,Any]:
+def update_weight(item_id: int, payload: WeightUpdateRequest, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     verify_admin_token(x_admin_token)
     with db() as conn:
-        existing=conn.execute("select id from items where id=?",(item_id,)).fetchone()
+        existing = conn.execute("select id from items where id=?", (item_id,)).fetchone()
         if not existing:
-            raise HTTPException(status_code=404,detail="Item not found")
-        conn.execute("update items set manual_weight=? where id=?",(payload.manual_weight,item_id))
-        return {"item_id":item_id,"manual_weight":payload.manual_weight}
-@app.get("/api/decks/{deck_id}/mistake_queue/summary")
-def mistake_queue_summary(deck_id:int,player_id:str,category:str|None=Query(default=None))->dict[str,Any]:
+            raise HTTPException(status_code=404, detail="Item not found")
+        conn.execute("update items set manual_weight=? where id=?", (payload.manual_weight, item_id))
+        return {"item_id": item_id, "manual_weight": payload.manual_weight}
+
+@app.post("/api/decks/{deck_id}/next")
+def next_item(deck_id: int, payload: NextRequest) -> dict[str, Any]:
     with db() as conn:
-        total_row=conn.execute("""
-            select count(*) as count
+        rows = fetch_items(conn, deck_id, payload.category)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Deck/category not found or empty")
+        stats_by_item: dict[int, sqlite3.Row] = {}
+        for row in rows:
+            stats_by_item[row["id"]] = get_or_create_stats(conn, payload.player_id, row["id"])
+        chosen = weighted_choice(rows, stats_by_item, exclude_item_id=payload.current_item_id)
+        stat = stats_by_item[chosen["id"]]
+        weight = compute_weight(stat, chosen["manual_weight"])
+        return {
+            "item_id": chosen["id"],
+            "category": chosen["category"],
+            "german": chosen["german"],
+            "stats": {
+                "seen": stat["seen"],
+                "correct": stat["correct"],
+                "wrong": stat["wrong"],
+                "streak": stat["streak"],
+            },
+            "weight": weight,
+        }
+
+@app.post("/api/decks/{deck_id}/answer")
+def submit_answer(deck_id: int, payload: AnswerRequest) -> dict[str, Any]:
+    with db() as conn:
+        row = conn.execute(
+            "select id,deck_id,category,german,english,accepted_answers from items where id=? and deck_id=?",
+            (payload.item_id, deck_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Item not found")
+        stat = get_or_create_stats(conn, payload.player_id, payload.item_id)
+        accepted = json.loads(row["accepted_answers"])
+        is_correct = any(answer_matches(payload.answer, accepted_answer) for accepted_answer in accepted)
+        seen = stat["seen"] + 1
+        correct = stat["correct"] + (1 if is_correct else 0)
+        wrong = stat["wrong"] + (0 if is_correct else 1)
+        streak = (stat["streak"] + 1) if is_correct else 0
+        last_wrong_at = stat["last_wrong_at"] if is_correct else now_iso()
+        conn.execute(
+            "update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=? where player_id=? and item_id=?",
+            (seen, correct, wrong, streak, last_wrong_at, payload.player_id, payload.item_id),
+        )
+        return {
+            "correct": is_correct,
+            "correct_answer": row["english"],
+            "category": row["category"],
+            "stats": {"seen": seen, "correct": correct, "wrong": wrong, "streak": streak},
+        }
+
+@app.get("/api/decks/{deck_id}/mistakes")
+def list_mistakes(deck_id: int, player_id: str, category: str | None = Query(default=None)) -> dict[str, Any]:
+    with db() as conn:
+        if category:
+            rows = conn.execute("""
+            select i.id,i.category,i.german,i.english,i.manual_weight,s.seen,s.correct,s.wrong,s.streak,s.last_wrong_at
             from items i
             join player_item_stats s on s.item_id=i.id
-            where i.deck_id=? and s.player_id=? and s.in_mistake_queue=1
-        """,(deck_id,player_id)).fetchone()
-        if category:
-            scoped_row=conn.execute("""
-                select count(*) as count
-                from items i
-                join player_item_stats s on s.item_id=i.id
-                where i.deck_id=? and s.player_id=? and s.in_mistake_queue=1 and i.category=?
-            """,(deck_id,player_id,category)).fetchone()
+            where i.deck_id=? and s.player_id=? and i.category=? and s.wrong>0
+            order by s.wrong desc,s.seen desc,i.id asc
+            """, (deck_id, player_id, category)).fetchall()
         else:
-            scoped_row=total_row
-        return {"total_queue":total_row["count"],"scoped_queue":scoped_row["count"]}
-@app.post("/api/decks/{deck_id}/next")
-def next_item(deck_id:int,payload:NextRequest)->dict[str,Any]:
-    mode=payload.mode if payload.mode in {"selected","mistakes","mixed"} else "selected"
-    with db() as conn:
-        rows=fetch_scope_items(conn,deck_id,payload.player_id,payload.category,mode)
-        if not rows:
-            raise HTTPException(status_code=404,detail="Deck selection has no items")
-        stats_by_item={}
+            rows = conn.execute("""
+            select i.id,i.category,i.german,i.english,i.manual_weight,s.seen,s.correct,s.wrong,s.streak,s.last_wrong_at
+            from items i
+            join player_item_stats s on s.item_id=i.id
+            where i.deck_id=? and s.player_id=? and s.wrong>0
+            order by s.wrong desc,s.seen desc,i.id asc
+            """, (deck_id, player_id)).fetchall()
+        items: list[dict[str, Any]] = []
         for row in rows:
-            stats_by_item[row["id"]]=get_or_create_stats(conn,payload.player_id,row["id"])
-        chosen=weighted_choice(rows,stats_by_item,mode,exclude_item_id=payload.current_item_id)
-        return {"item_id":chosen["id"],"category":chosen["category"],"german":chosen["german"]}
-@app.post("/api/decks/{deck_id}/answer")
-def submit_answer(deck_id:int,payload:AnswerRequest)->dict[str,Any]:
+            items.append({
+                "item_id": row["id"],
+                "category": row["category"],
+                "german": row["german"],
+                "english": row["english"],
+                "seen": row["seen"],
+                "correct": row["correct"],
+                "wrong": row["wrong"],
+                "streak": row["streak"],
+                "last_wrong_at": row["last_wrong_at"],
+                "weight": compute_weight(row, row["manual_weight"]),
+            })
+        return {"items": items}
+
+@app.get("/api/decks/{deck_id}/stats/{player_id}")
+def overall_stats(deck_id: int, player_id: str, category: str | None = Query(default=None)) -> dict[str, Any]:
     with db() as conn:
-        row=conn.execute("select id,deck_id,category,german,english,accepted_answers from items where id=? and deck_id=?",(payload.item_id,deck_id)).fetchone()
-        if not row:
-            raise HTTPException(status_code=404,detail="Item not found")
-        stat=get_or_create_stats(conn,payload.player_id,payload.item_id)
-        accepted=json.loads(row["accepted_answers"])
-        is_correct=any(answer_matches(payload.answer,accepted_answer) for accepted_answer in accepted)
-        seen=stat["seen"]+1
-        correct=stat["correct"]+(1 if is_correct else 0)
-        wrong=stat["wrong"]+(0 if is_correct else 1)
-        streak=(stat["streak"]+1) if is_correct else 0
-        last_wrong_at=stat["last_wrong_at"] if is_correct else now_iso()
-        if is_correct:
-            in_mistake_queue=stat["in_mistake_queue"]
-            mistake_clear_streak=(stat["mistake_clear_streak"]+1) if stat["in_mistake_queue"] else 0
-            if in_mistake_queue and mistake_clear_streak>=2:
-                in_mistake_queue=0
-                mistake_clear_streak=0
+        if category:
+            row = conn.execute("""
+            select coalesce(sum(s.seen),0) as seen,coalesce(sum(s.correct),0) as correct,coalesce(sum(s.wrong),0) as wrong
+            from items i
+            left join player_item_stats s on s.item_id=i.id and s.player_id=?
+            where i.deck_id=? and i.category=?
+            """, (player_id, deck_id, category)).fetchone()
         else:
-            in_mistake_queue=1
-            mistake_clear_streak=0
-        conn.execute("update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=?,in_mistake_queue=?,mistake_clear_streak=? where player_id=? and item_id=?",(seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak,payload.player_id,payload.item_id))
-        return {"correct":is_correct,"correct_answer":row["english"],"category":row["category"],"queued_for_review":bool(in_mistake_queue)}
+            row = conn.execute("""
+            select coalesce(sum(s.seen),0) as seen,coalesce(sum(s.correct),0) as correct,coalesce(sum(s.wrong),0) as wrong
+            from items i
+            left join player_item_stats s on s.item_id=i.id and s.player_id=?
+            where i.deck_id=?
+            """, (player_id, deck_id)).fetchone()
+        accuracy = (row["correct"] / row["seen"]) if row["seen"] else 0.0
+        return {"seen": row["seen"], "correct": row["correct"], "wrong": row["wrong"], "accuracy": accuracy}
