@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 import json
 import os
@@ -15,15 +14,10 @@ from pydantic import BaseModel, Field
 
 DB_PATH = Path("vocab_quiz.db")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "change-me")
+MISTAKES_VALUE = "__mistakes__"
 
-app = FastAPI(title="Vocabulary Quiz API", version="2.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="Frontex Vocab Quiz API", version="3.1.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 INDEX_HTML = """<!doctype html>
 <html>
@@ -42,9 +36,7 @@ button.secondary{background:#e2e8f0;color:#0f172a}
 .small{font-size:14px;color:#475569}
 .good{color:#15803d;font-weight:700}
 .bad{color:#b91c1c;font-weight:700}
-.badge{display:inline-block;background:#e2e8f0;border-radius:999px;padding:4px 10px;margin-right:8px;font-size:12px}
 .hidden{display:none}
-a{color:#0f172a}
 </style>
 </head>
 <body>
@@ -57,7 +49,6 @@ a{color:#0f172a}
 </div>
 <div style="margin-top:12px"><button class="secondary" onclick="loadDecks()">refresh</button></div>
 <p class="small" id="deckInfo"></p>
-<p class="small">Public users can practice existing decks and optionally restrict practice to one category.</p>
 </div>
 <div class="card">
 <h2>Quiz</h2>
@@ -71,13 +62,8 @@ a{color:#0f172a}
 <button class="secondary" onclick="nextItem()">skip</button>
 </div>
 <p id="feedback" style="margin-top:12px"></p>
-<div id="stats"></div>
 </div>
 <p id="quizEmpty" class="small">no public deck available yet.</p>
-</div>
-<div class="card">
-<h2>Mistakes in current scope</h2>
-<div id="mistakes" class="small">no data yet.</div>
 </div>
 <script>
 const playerId=localStorage.getItem('player_id')||crypto.randomUUID();
@@ -89,9 +75,13 @@ async function api(path,options={}){
   if(!res.ok){const text=await res.text();throw new Error(text||res.statusText);}
   return res.json();
 }
-function currentCategory(){
+function currentCategoryValue(){
   const value=document.getElementById('categorySelect').value;
-  return value||null;
+  return value||'';
+}
+function categoryPayloadValue(){
+  const value=currentCategoryValue();
+  return value || null;
 }
 async function loadDecks(){
   const data=await api('/api/decks');
@@ -110,7 +100,6 @@ async function loadDecks(){
     document.getElementById('quizEmpty').classList.add('hidden');
     await loadCategories();
     await nextItem();
-    await loadMistakes();
   }else{
     document.getElementById('deckInfo').textContent='';
     document.getElementById('quizBox').classList.add('hidden');
@@ -127,6 +116,10 @@ async function loadCategories(){
   all.value='';
   all.textContent='All categories';
   select.appendChild(all);
+  const mistakes=document.createElement('option');
+  mistakes.value='__mistakes__';
+  mistakes.textContent='Mistakes';
+  select.appendChild(mistakes);
   for(const category of data.categories){
     const opt=document.createElement('option');
     opt.value=category;
@@ -134,34 +127,46 @@ async function loadCategories(){
     select.appendChild(opt);
   }
   if([...select.options].some(x=>x.value===previous)){select.value=previous;}
-  document.getElementById('categoryLabel').textContent=select.value?`category: ${select.value}`:'category: all';
+  updateCategoryLabel();
+}
+function updateCategoryLabel(){
+  const value=currentCategoryValue();
+  const label=document.getElementById('categoryLabel');
+  if(value==='__mistakes__'){
+    label.textContent='category: mistakes';
+  }else if(value){
+    label.textContent=`category: ${value}`;
+  }else{
+    label.textContent='category: all';
+  }
 }
 document.getElementById('deckSelect').addEventListener('change',async(e)=>{
   currentDeckId=e.target.value;
   await loadCategories();
   await nextItem();
-  await loadMistakes();
 });
 document.getElementById('categorySelect').addEventListener('change',async()=>{
-  document.getElementById('categoryLabel').textContent=currentCategory()?`category: ${currentCategory()}`:'category: all';
+  updateCategoryLabel();
   await nextItem();
-  await loadMistakes();
 });
 async function nextItem(){
   if(!currentDeckId)return;
   try{
-    const data=await api(`/api/decks/${currentDeckId}/next`,{method:'POST',body:JSON.stringify({player_id:playerId,current_item_id:currentItem?.item_id||null,category:currentCategory()})});
+    const data=await api(`/api/decks/${currentDeckId}/next`,{method:'POST',body:JSON.stringify({player_id:playerId,current_item_id:currentItem?.item_id||null,category:categoryPayloadValue()})});
     currentItem=data;
     document.getElementById('prompt').textContent=data.german;
     document.getElementById('answer').value='';
     document.getElementById('feedback').textContent='';
-    document.getElementById('categoryLabel').textContent=`category: ${data.category}`;
-    document.getElementById('stats').innerHTML=`<span class="badge">seen ${data.stats.seen}</span><span class="badge">wrong ${data.stats.wrong}</span><span class="badge">weight ${data.weight.toFixed(2)}</span>`;
+    if(data.category_label){
+      document.getElementById('categoryLabel').textContent=`category: ${data.category_label}`;
+    }else{
+      updateCategoryLabel();
+    }
     document.getElementById('answer').focus();
   }catch(err){
-    document.getElementById('prompt').textContent='No items found for this category.';
-    document.getElementById('stats').innerHTML='';
     currentItem=null;
+    document.getElementById('prompt').textContent='No items available for this selection.';
+    document.getElementById('feedback').textContent='';
   }
 }
 async function submitAnswer(){
@@ -169,17 +174,7 @@ async function submitAnswer(){
   const answer=document.getElementById('answer').value;
   const data=await api(`/api/decks/${currentDeckId}/answer`,{method:'POST',body:JSON.stringify({player_id:playerId,item_id:currentItem.item_id,answer})});
   document.getElementById('feedback').innerHTML=data.correct?`<span class="good">correct</span>`:`<span class="bad">wrong</span> — correct answer: ${data.correct_answer}`;
-  await loadMistakes();
   setTimeout(nextItem,900);
-}
-async function loadMistakes(){
-  if(!currentDeckId)return;
-  const category=currentCategory();
-  const suffix=category?`&category=${encodeURIComponent(category)}`:'';
-  const data=await api(`/api/decks/${currentDeckId}/mistakes?player_id=${encodeURIComponent(playerId)}${suffix}`);
-  const div=document.getElementById('mistakes');
-  if(!data.items.length){div.textContent='no mistake history yet.';return;}
-  div.innerHTML=data.items.map(x=>`<div style="padding:8px 0;border-bottom:1px solid #e2e8f0"><strong>[${x.category}] ${x.german}</strong> → ${x.english}<br>wrong: ${x.wrong}, seen: ${x.seen}, weight: ${x.weight.toFixed(2)}</div>`).join('');
 }
 loadDecks();
 </script>
@@ -192,7 +187,7 @@ ADMIN_HTML = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vocabulary Quiz Admin</title>
+<title>Frontex Vocab Quiz Admin</title>
 <style>
 body{font-family:Arial,sans-serif;max-width:1200px;margin:40px auto;padding:0 16px;background:#f8fafc;color:#0f172a}
 .card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:20px;margin-bottom:16px}
@@ -216,7 +211,7 @@ a{color:#0f172a}
 </div>
 <div class="card">
 <h2>Import a deck with categories</h2>
-<p class="small">Recommended format: save a plain <strong>.txt</strong> file with one item per line using semicolons. Preferred 3-column format: <strong>category;German;English</strong>. Example:<br><br>Basics;guten Morgen;good morning<br>Travel;der Bahnhof;train station<br>Travel;Entschuldigung;sorry|excuse me</p>
+<p class="small">Recommended format: <strong>category;German;English</strong>. Example:<br><br>Basics;guten Morgen;good morning<br>Travel;der Bahnhof;train station<br>Travel;Entschuldigung;sorry|excuse me</p>
 <p class="small">2-column lines are also allowed and will go into the default category <strong>General</strong>: <strong>German;English</strong>.</p>
 <input id="deckName" placeholder="deck name" value="My vocabulary">
 <textarea id="deckText" rows="14" placeholder="Basics;guten Morgen;good morning&#10;Basics;Wie geht's?;how are you?&#10;Travel;der Bahnhof;train station&#10;Travel;Entschuldigung;sorry|excuse me"></textarea>
@@ -230,7 +225,7 @@ a{color:#0f172a}
 <select id="adminCategorySelect"></select>
 <button class="secondary" onclick="loadAdminItems()">load items</button>
 </div>
-<p class="small">Manual weight guide: 0.3 = rare, 1.0 = normal, 2.0 = more frequent, 4.0 = very frequent. Final quiz frequency still depends on mistakes and streaks.</p>
+<p class="small">Manual weight guide: 0.3 = rare, 1.0 = normal, 2.0 = more frequent, 4.0 = very frequent.</p>
 <div style="overflow:auto">
 <table>
 <thead>
@@ -243,10 +238,6 @@ a{color:#0f172a}
 </div>
 </div>
 <div class="card">
-<h2>Existing decks and categories</h2>
-<div id="decks" class="small"></div>
-</div>
-<div class="card">
 <h2>Delete a deck</h2>
 <div class="row">
 <select id="deleteDeckSelect"></select>
@@ -254,6 +245,10 @@ a{color:#0f172a}
 <button class="secondary" onclick="loadDeleteDecks()">refresh list</button>
 </div>
 <p class="small" id="deleteResult"></p>
+</div>
+<div class="card">
+<h2>Existing decks and categories</h2>
+<div id="decks" class="small"></div>
 </div>
 <p class="small"><a href="/">back to public quiz</a></p>
 <script>
@@ -265,8 +260,9 @@ async function api(path,options={}){
   const headers={'Content-Type':'application/json',...(options.headers||{})};
   if(token){headers['x-admin-token']=token;}
   const res=await fetch(path,{...options,headers});
-  if(!res.ok){const text=await res.text();throw new Error(text||res.statusText);}
-  return res.json();
+  const text=await res.text();
+  if(!res.ok){throw new Error(text||res.statusText);}
+  return text ? JSON.parse(text) : {};
 }
 async function importDeck(){
   try{
@@ -280,8 +276,13 @@ async function importDeck(){
     document.getElementById('result').textContent=`import failed: ${err.message}`;
   }
 }
+async function publicApi(path){
+  const res=await fetch(path);
+  if(!res.ok){const text=await res.text();throw new Error(text||res.statusText);}
+  return res.json();
+}
 async function loadAdminDecks(){
-  const data=await fetch('/api/decks').then(r=>r.json());
+  const data=await publicApi('/api/decks');
   const select=document.getElementById('adminDeckSelect');
   select.innerHTML='';
   for(const deck of data.decks){
@@ -300,7 +301,7 @@ async function loadAdminDecks(){
 }
 async function loadAdminCategories(){
   const deckId=document.getElementById('adminDeckSelect').value;
-  const data=await fetch(`/api/decks/${deckId}/categories`).then(r=>r.json());
+  const data=await publicApi(`/api/decks/${deckId}/categories`);
   const select=document.getElementById('adminCategorySelect');
   select.innerHTML='';
   const all=document.createElement('option');
@@ -324,7 +325,7 @@ async function loadAdminItems(){
   if(!deckId)return;
   const category=document.getElementById('adminCategorySelect').value;
   const suffix=category?`?category=${encodeURIComponent(category)}`:'';
-  const data=await fetch(`/api/decks/${deckId}/items${suffix}`).then(r=>r.json());
+  const data=await publicApi(`/api/decks/${deckId}/items${suffix}`);
   const body=document.getElementById('itemTableBody');
   if(!data.items.length){
     body.innerHTML='<tr><td colspan="5" class="small">no items found.</td></tr>';
@@ -350,9 +351,8 @@ async function saveWeight(itemId){
   }
 }
 async function loadDeleteDecks(){
-  const data=await fetch('/api/decks').then(r=>r.json());
+  const data=await publicApi('/api/decks');
   const select=document.getElementById('deleteDeckSelect');
-  if(!select)return;
   select.innerHTML='';
   for(const deck of data.decks){
     const opt=document.createElement('option');
@@ -364,12 +364,12 @@ async function loadDeleteDecks(){
 async function deleteDeck(){
   const select=document.getElementById('deleteDeckSelect');
   const deckId=select.value;
-  if(!deckId){return;}
+  if(!deckId)return;
   const confirmed=confirm('Delete this deck permanently? This also deletes its items and all user progress for it.');
-  if(!confirmed){return;}
+  if(!confirmed)return;
   try{
-    await api(`/api/decks/${deckId}`,{method:'DELETE'});
-    document.getElementById('deleteResult').textContent='deck deleted';
+    const data=await api(`/api/decks/${deckId}`,{method:'DELETE'});
+    document.getElementById('deleteResult').textContent=`deck deleted: ${data.name}`;
     await loadAdminDecks();
     await loadDeckSummaries();
   }catch(err){
@@ -377,12 +377,12 @@ async function deleteDeck(){
   }
 }
 async function loadDeckSummaries(){
-  const data=await fetch('/api/decks').then(r=>r.json());
+  const data=await publicApi('/api/decks');
   const div=document.getElementById('decks');
   if(!data.decks.length){div.textContent='no decks yet.';return;}
   let html='';
   for(const deck of data.decks){
-    const categories=await fetch(`/api/decks/${deck.id}/categories`).then(r=>r.json());
+    const categories=await publicApi(`/api/decks/${deck.id}/categories`);
     html+=`<div style="padding:8px 0;border-bottom:1px solid #e2e8f0"><strong>${deck.name}</strong> <span class="badge">items ${deck.item_count}</span> <span class="badge">categories ${categories.categories.length}</span><br>${categories.categories.join(', ')||'General'}</div>`;
   }
   div.innerHTML=html;
@@ -424,27 +424,11 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def normalize_text(value: str) -> str:
-    return " ".join(
-        value.lower()
-        .strip()
-        .replace("’", "'")
-        .replace("`", "'")
-        .translate(str.maketrans("", "", ".!?,;:"))
-        .split()
-    )
+    return " ".join(value.lower().strip().replace("’", "'").replace("`", "'").translate(str.maketrans("", "", ".!?,;:")).split())
 
 def expand_german_variants(value: str) -> set[str]:
     forms = {normalize_text(value)}
-    rules = [
-        ("ä", ["ae", "a"]),
-        ("ö", ["oe", "o"]),
-        ("ü", ["ue", "u"]),
-        ("ß", ["ss"]),
-        ("ae", ["ä", "a"]),
-        ("oe", ["ö", "o"]),
-        ("ue", ["ü", "u"]),
-        ("ss", ["ß"]),
-    ]
+    rules = [("ä", ["ae", "a"]), ("ö", ["oe", "o"]), ("ü", ["ue", "u"]), ("ß", ["ss"]), ("ae", ["ä", "a"]), ("oe", ["ö", "o"]), ("ue", ["ü", "u"]), ("ss", ["ß"])]
     changed = True
     while changed:
         changed = False
@@ -497,6 +481,7 @@ def parse_line(line: str) -> tuple[str, str, str] | None:
 def db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    conn.execute("pragma foreign_keys = on")
     try:
         yield conn
         conn.commit()
@@ -533,11 +518,17 @@ def init_db() -> None:
             wrong integer not null default 0,
             streak integer not null default 0,
             last_wrong_at text null,
+            in_mistake_queue integer not null default 0,
+            mistake_clear_streak integer not null default 0,
             primary key(player_id,item_id)
         );
         """)
         if not column_exists(conn, "items", "category"):
             conn.execute("alter table items add column category text not null default 'General'")
+        if not column_exists(conn, "player_item_stats", "in_mistake_queue"):
+            conn.execute("alter table player_item_stats add column in_mistake_queue integer not null default 0")
+        if not column_exists(conn, "player_item_stats", "mistake_clear_streak"):
+            conn.execute("alter table player_item_stats add column mistake_clear_streak integer not null default 0")
         conn.execute("create unique index if not exists idx_items_unique on items(deck_id,category,german,english)")
 
 @app.on_event("startup")
@@ -549,20 +540,14 @@ def verify_admin_token(x_admin_token: str | None) -> None:
         raise HTTPException(status_code=403, detail="Admin token required")
 
 def get_or_create_stats(conn: sqlite3.Connection, player_id: str, item_id: int) -> sqlite3.Row:
-    row = conn.execute(
-        "select * from player_item_stats where player_id=? and item_id=?",
-        (player_id, item_id),
-    ).fetchone()
+    row = conn.execute("select * from player_item_stats where player_id=? and item_id=?", (player_id, item_id)).fetchone()
     if row:
         return row
     conn.execute(
-        "insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at) values(?,?,?,?,?,?,?)",
-        (player_id, item_id, 0, 0, 0, 0, None),
+        "insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak) values(?,?,?,?,?,?,?,?,?)",
+        (player_id, item_id, 0, 0, 0, 0, None, 0, 0),
     )
-    return conn.execute(
-        "select * from player_item_stats where player_id=? and item_id=?",
-        (player_id, item_id),
-    ).fetchone()
+    return conn.execute("select * from player_item_stats where player_id=? and item_id=?", (player_id, item_id)).fetchone()
 
 def compute_weight(stat: sqlite3.Row | dict[str, Any], manual_weight: float, settings: Settings = DEFAULT_SETTINGS) -> float:
     seen = stat["seen"] if isinstance(stat, sqlite3.Row) else stat.get("seen", 0)
@@ -574,10 +559,27 @@ def compute_weight(stat: sqlite3.Row | dict[str, Any], manual_weight: float, set
     streak_penalty = max(settings.min_weight, 1 - (streak * settings.streak_decay))
     unseen_boost = settings.unseen_boost if seen == 0 else 1.0
     low_accuracy_boost = 1 + (max(0.0, 1 - accuracy) * settings.accuracy_factor)
-    return max(settings.min_weight, manual_weight * wrong_boost * streak_penalty * unseen_boost * low_accuracy_boost)
+    queue_boost = 1.8 if (stat["in_mistake_queue"] if isinstance(stat, sqlite3.Row) else stat.get("in_mistake_queue", 0)) else 1.0
+    return max(settings.min_weight, manual_weight * wrong_boost * streak_penalty * unseen_boost * low_accuracy_boost * queue_boost)
+
+def fetch_items(conn: sqlite3.Connection, deck_id: int, category: str | None = None) -> list[sqlite3.Row]:
+    if category:
+        return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? and category=? order by id asc", (deck_id, category)).fetchall()
+    return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? order by category asc,id asc", (deck_id,)).fetchall()
+
+def fetch_candidate_items(conn: sqlite3.Connection, deck_id: int, player_id: str, category: str | None) -> list[sqlite3.Row]:
+    if category == MISTAKES_VALUE:
+        return conn.execute("""
+            select i.id,i.deck_id,i.category,i.german,i.english,i.manual_weight
+            from items i
+            join player_item_stats s on s.item_id=i.id
+            where i.deck_id=? and s.player_id=? and s.in_mistake_queue=1
+            order by i.category asc,i.id asc
+        """, (deck_id, player_id)).fetchall()
+    return fetch_items(conn, deck_id, category)
 
 def weighted_choice(rows: list[sqlite3.Row], stats_by_item: dict[int, sqlite3.Row], exclude_item_id: int | None = None) -> sqlite3.Row:
-    candidates: list[tuple[sqlite3.Row, float]] = []
+    candidates = []
     for row in rows:
         if exclude_item_id is not None and len(rows) > 1 and row["id"] == exclude_item_id:
             continue
@@ -595,17 +597,6 @@ def weighted_choice(rows: list[sqlite3.Row], stats_by_item: dict[int, sqlite3.Ro
             return row
     return candidates[-1][0]
 
-def fetch_items(conn: sqlite3.Connection, deck_id: int, category: str | None = None) -> list[sqlite3.Row]:
-    if category:
-        return conn.execute(
-            "select id,deck_id,category,german,english,manual_weight from items where deck_id=? and category=? order by id asc",
-            (deck_id, category),
-        ).fetchall()
-    return conn.execute(
-        "select id,deck_id,category,german,english,manual_weight from items where deck_id=? order by category asc,id asc",
-        (deck_id,),
-    ).fetchall()
-
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     return INDEX_HTML
@@ -622,27 +613,24 @@ def health() -> dict[str, str]:
 def list_decks() -> dict[str, Any]:
     with db() as conn:
         rows = conn.execute("""
-        select d.id,d.name,d.created_at,count(i.id) as item_count
-        from decks d
-        left join items i on i.deck_id=d.id
-        group by d.id,d.name,d.created_at
-        order by d.id desc
+            select d.id,d.name,d.created_at,count(i.id) as item_count
+            from decks d
+            left join items i on i.deck_id=d.id
+            group by d.id,d.name,d.created_at
+            order by d.id desc
         """).fetchall()
         return {"decks": [dict(row) for row in rows]}
 
 @app.get("/api/decks/{deck_id}/categories")
 def list_categories(deck_id: int) -> dict[str, Any]:
     with db() as conn:
-        rows = conn.execute(
-            "select distinct category from items where deck_id=? order by category asc",
-            (deck_id,),
-        ).fetchall()
+        rows = conn.execute("select distinct category from items where deck_id=? order by category asc", (deck_id,)).fetchall()
         return {"categories": [row["category"] for row in rows]}
 
 @app.post("/api/decks/import")
 def import_deck(payload: ImportDeckRequest, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
     verify_admin_token(x_admin_token)
-    parsed: list[tuple[str, str, str]] = []
+    parsed = []
     for line in payload.text.splitlines():
         item = parse_line(line)
         if item:
@@ -650,12 +638,9 @@ def import_deck(payload: ImportDeckRequest, x_admin_token: str | None = Header(d
     if not parsed:
         raise HTTPException(status_code=400, detail="No valid lines found")
     with db() as conn:
-        cur = conn.execute(
-            "insert into decks(name,created_at) values(?,?)",
-            (payload.name, now_iso()),
-        )
+        cur = conn.execute("insert into decks(name,created_at) values(?,?)", (payload.name, now_iso()))
         deck_id = cur.lastrowid
-        categories: set[str] = set()
+        categories = set()
         for category, german, english in parsed:
             accepted = json.dumps(split_answers(english), ensure_ascii=False)
             conn.execute(
@@ -664,6 +649,16 @@ def import_deck(payload: ImportDeckRequest, x_admin_token: str | None = Header(d
             )
             categories.add(category)
         return {"deck_id": deck_id, "item_count": len(parsed), "category_count": len(categories)}
+
+@app.delete("/api/decks/{deck_id}")
+def delete_deck(deck_id: int, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+    verify_admin_token(x_admin_token)
+    with db() as conn:
+        existing = conn.execute("select id,name from decks where id=?", (deck_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Deck not found")
+        conn.execute("delete from decks where id=?", (deck_id,))
+        return {"deleted": True, "deck_id": deck_id, "name": existing["name"]}
 
 @app.get("/api/decks/{deck_id}/items")
 def list_items(deck_id: int, category: str | None = Query(default=None)) -> dict[str, Any]:
@@ -684,35 +679,20 @@ def update_weight(item_id: int, payload: WeightUpdateRequest, x_admin_token: str
 @app.post("/api/decks/{deck_id}/next")
 def next_item(deck_id: int, payload: NextRequest) -> dict[str, Any]:
     with db() as conn:
-        rows = fetch_items(conn, deck_id, payload.category)
+        rows = fetch_candidate_items(conn, deck_id, payload.player_id, payload.category)
         if not rows:
-            raise HTTPException(status_code=404, detail="Deck/category not found or empty")
-        stats_by_item: dict[int, sqlite3.Row] = {}
+            raise HTTPException(status_code=404, detail="Deck selection has no items")
+        stats_by_item = {}
         for row in rows:
             stats_by_item[row["id"]] = get_or_create_stats(conn, payload.player_id, row["id"])
         chosen = weighted_choice(rows, stats_by_item, exclude_item_id=payload.current_item_id)
-        stat = stats_by_item[chosen["id"]]
-        weight = compute_weight(stat, chosen["manual_weight"])
-        return {
-            "item_id": chosen["id"],
-            "category": chosen["category"],
-            "german": chosen["german"],
-            "stats": {
-                "seen": stat["seen"],
-                "correct": stat["correct"],
-                "wrong": stat["wrong"],
-                "streak": stat["streak"],
-            },
-            "weight": weight,
-        }
+        category_label = "mistakes" if payload.category == MISTAKES_VALUE else chosen["category"]
+        return {"item_id": chosen["id"], "category": chosen["category"], "category_label": category_label, "german": chosen["german"]}
 
 @app.post("/api/decks/{deck_id}/answer")
 def submit_answer(deck_id: int, payload: AnswerRequest) -> dict[str, Any]:
     with db() as conn:
-        row = conn.execute(
-            "select id,deck_id,category,german,english,accepted_answers from items where id=? and deck_id=?",
-            (payload.item_id, deck_id),
-        ).fetchone()
+        row = conn.execute("select id,deck_id,category,german,english,accepted_answers from items where id=? and deck_id=?", (payload.item_id, deck_id)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Item not found")
         stat = get_or_create_stats(conn, payload.player_id, payload.item_id)
@@ -723,68 +703,17 @@ def submit_answer(deck_id: int, payload: AnswerRequest) -> dict[str, Any]:
         wrong = stat["wrong"] + (0 if is_correct else 1)
         streak = (stat["streak"] + 1) if is_correct else 0
         last_wrong_at = stat["last_wrong_at"] if is_correct else now_iso()
+        if is_correct:
+            in_mistake_queue = stat["in_mistake_queue"]
+            mistake_clear_streak = (stat["mistake_clear_streak"] + 1) if stat["in_mistake_queue"] else 0
+            if in_mistake_queue and mistake_clear_streak >= 2:
+                in_mistake_queue = 0
+                mistake_clear_streak = 0
+        else:
+            in_mistake_queue = 1
+            mistake_clear_streak = 0
         conn.execute(
-            "update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=? where player_id=? and item_id=?",
-            (seen, correct, wrong, streak, last_wrong_at, payload.player_id, payload.item_id),
+            "update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=?,in_mistake_queue=?,mistake_clear_streak=? where player_id=? and item_id=?",
+            (seen, correct, wrong, streak, last_wrong_at, in_mistake_queue, mistake_clear_streak, payload.player_id, payload.item_id),
         )
-        return {
-            "correct": is_correct,
-            "correct_answer": row["english"],
-            "category": row["category"],
-            "stats": {"seen": seen, "correct": correct, "wrong": wrong, "streak": streak},
-        }
-
-@app.get("/api/decks/{deck_id}/mistakes")
-def list_mistakes(deck_id: int, player_id: str, category: str | None = Query(default=None)) -> dict[str, Any]:
-    with db() as conn:
-        if category:
-            rows = conn.execute("""
-            select i.id,i.category,i.german,i.english,i.manual_weight,s.seen,s.correct,s.wrong,s.streak,s.last_wrong_at
-            from items i
-            join player_item_stats s on s.item_id=i.id
-            where i.deck_id=? and s.player_id=? and i.category=? and s.wrong>0
-            order by s.wrong desc,s.seen desc,i.id asc
-            """, (deck_id, player_id, category)).fetchall()
-        else:
-            rows = conn.execute("""
-            select i.id,i.category,i.german,i.english,i.manual_weight,s.seen,s.correct,s.wrong,s.streak,s.last_wrong_at
-            from items i
-            join player_item_stats s on s.item_id=i.id
-            where i.deck_id=? and s.player_id=? and s.wrong>0
-            order by s.wrong desc,s.seen desc,i.id asc
-            """, (deck_id, player_id)).fetchall()
-        items: list[dict[str, Any]] = []
-        for row in rows:
-            items.append({
-                "item_id": row["id"],
-                "category": row["category"],
-                "german": row["german"],
-                "english": row["english"],
-                "seen": row["seen"],
-                "correct": row["correct"],
-                "wrong": row["wrong"],
-                "streak": row["streak"],
-                "last_wrong_at": row["last_wrong_at"],
-                "weight": compute_weight(row, row["manual_weight"]),
-            })
-        return {"items": items}
-
-@app.get("/api/decks/{deck_id}/stats/{player_id}")
-def overall_stats(deck_id: int, player_id: str, category: str | None = Query(default=None)) -> dict[str, Any]:
-    with db() as conn:
-        if category:
-            row = conn.execute("""
-            select coalesce(sum(s.seen),0) as seen,coalesce(sum(s.correct),0) as correct,coalesce(sum(s.wrong),0) as wrong
-            from items i
-            left join player_item_stats s on s.item_id=i.id and s.player_id=?
-            where i.deck_id=? and i.category=?
-            """, (player_id, deck_id, category)).fetchone()
-        else:
-            row = conn.execute("""
-            select coalesce(sum(s.seen),0) as seen,coalesce(sum(s.correct),0) as correct,coalesce(sum(s.wrong),0) as wrong
-            from items i
-            left join player_item_stats s on s.item_id=i.id and s.player_id=?
-            where i.deck_id=?
-            """, (player_id, deck_id)).fetchone()
-        accuracy = (row["correct"] / row["seen"]) if row["seen"] else 0.0
-        return {"seen": row["seen"], "correct": row["correct"], "wrong": row["wrong"], "accuracy": accuracy}
+        return {"correct": is_correct, "correct_answer": row["english"], "category": row["category"], "queued_for_review": bool(in_mistake_queue)}
