@@ -37,7 +37,7 @@ a{color:#0f172a}
 </style>
 </head>
 <body>
-<h1>German → English quiz</h1>
+<h1>Frontex vocab quiz</h1>
 <div class="card">
 <h2>Deck, category, and mode</h2>
 <div class="row">
