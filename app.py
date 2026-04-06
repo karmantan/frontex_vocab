@@ -62,7 +62,7 @@ a{color:#0f172a}
 <div class="card">
 <h2>Quiz</h2>
 <div id="quizBox" class="hidden">
-<p class="small">German prompt</p>
+<p class="small"></p>
 <h3 id="prompt"></h3>
 <p class="small" id="categoryLabel"></p>
 <input id="answer" placeholder="type the english answer" onkeydown="if(event.key==='Enter'){submitAnswer()}">
