@@ -12,8 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
-DB_PATH = Path("vocab_quiz.db")
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "change-me")
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = BASE_DIR / "vocab_quiz.db"
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "gintama")
 MISTAKES_VALUE = "__mistakes__"
 
 app = FastAPI(title="Frontex Vocab Quiz API", version="3.1.0")
