@@ -99,7 +99,7 @@ Titles and field names;Link zur Abbildung;link to image|image link
 Titles and field names;Bildreihenfolge;priority of image|image priority
 Titles and field names;Bildbreite;width of image|image width
 Titles and field names;Ausstellendes Land;issuing country
-Titles and field names;Folienprägung|laminate embossing
+Titles and field names;Folienprägung;laminate embossing
 Titles and field names;Folie in die Bindung integriert;laminate integrated by binding
 Titles and field names;Folienaufdruck;laminate overprint
 Titles and field names;Platzierung der Folie;Laminate position
@@ -130,7 +130,7 @@ Titles and field names;OVD-Merkmale;OVD features
 Titles and field names;Hauptfarbe;overall colour|overall color|main colour|main color
 Titles and field names;Lichtbild gedruckt;Printed photo
 Titles and field names;Bereichsende des physischen Dok.bestandteils;physical document element range end|physical doc.element range end
-Titles and field names;Bereichsanfang d. Physischen Dok.besatndteils;physcial document element range start|physical doc.element range start
+Titles and field names;Bereichsanfang d. Physischen Dok.bestandteils;physcial document element range start|physical doc.element range start
 Titles and field names;Ort;Place
 Titles and field names;Austellungsort;place of issue
 Titles and field names;Planchetten;planchettes

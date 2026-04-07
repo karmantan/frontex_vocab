@@ -11,16 +11,13 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "vocab_quiz.db"
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "gintama")
-MISTAKES_VALUE = "__mistakes__"
-
-app = FastAPI(title="Frontex Vocab Quiz API", version="3.1.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
-
-INDEX_HTML = """<!doctype html>
+BASE_DIR=Path(__file__).resolve().parent
+DB_PATH=BASE_DIR/"vocab_quiz.db"
+ADMIN_TOKEN=os.getenv("ADMIN_TOKEN","change-me")
+MISTAKES_VALUE="__mistakes__"
+app=FastAPI(title="Frontex Vocab Quiz API",version="3.2.0")
+app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
+INDEX_HTML="""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -54,7 +51,7 @@ button.secondary{background:#e2e8f0;color:#0f172a}
 <div class="card">
 <h2>Quiz</h2>
 <div id="quizBox" class="hidden">
-<p class="small"></p>
+<p class="small">German prompt</p>
 <h3 id="prompt"></h3>
 <p class="small" id="categoryLabel"></p>
 <input id="answer" placeholder="type the english answer" onkeydown="if(event.key==='Enter'){submitAnswer()}">
@@ -69,8 +66,11 @@ button.secondary{background:#e2e8f0;color:#0f172a}
 <script>
 const playerId=localStorage.getItem('player_id')||crypto.randomUUID();
 localStorage.setItem('player_id',playerId);
+const ANSWER_DELAY_CORRECT_MS=1200;
+const ANSWER_DELAY_WRONG_MS=5000;
 let currentDeckId=null;
 let currentItem=null;
+let pendingTimer=null;
 async function api(path,options={}){
   const res=await fetch(path,{headers:{'Content-Type':'application/json'},...options});
   if(!res.ok){const text=await res.text();throw new Error(text||res.statusText);}
@@ -82,7 +82,13 @@ function currentCategoryValue(){
 }
 function categoryPayloadValue(){
   const value=currentCategoryValue();
-  return value || null;
+  return value||null;
+}
+function clearPendingTimer(){
+  if(pendingTimer){
+    clearTimeout(pendingTimer);
+    pendingTimer=null;
+  }
 }
 async function loadDecks(){
   const data=await api('/api/decks');
@@ -142,15 +148,18 @@ function updateCategoryLabel(){
   }
 }
 document.getElementById('deckSelect').addEventListener('change',async(e)=>{
+  clearPendingTimer();
   currentDeckId=e.target.value;
   await loadCategories();
   await nextItem();
 });
 document.getElementById('categorySelect').addEventListener('change',async()=>{
+  clearPendingTimer();
   updateCategoryLabel();
   await nextItem();
 });
 async function nextItem(){
+  clearPendingTimer();
   if(!currentDeckId)return;
   try{
     const data=await api(`/api/decks/${currentDeckId}/next`,{method:'POST',body:JSON.stringify({player_id:playerId,current_item_id:currentItem?.item_id||null,category:categoryPayloadValue()})});
@@ -172,18 +181,19 @@ async function nextItem(){
 }
 async function submitAnswer(){
   if(!currentDeckId||!currentItem)return;
+  clearPendingTimer();
   const answer=document.getElementById('answer').value;
   const data=await api(`/api/decks/${currentDeckId}/answer`,{method:'POST',body:JSON.stringify({player_id:playerId,item_id:currentItem.item_id,answer})});
   document.getElementById('feedback').innerHTML=data.correct?`<span class="good">correct</span>`:`<span class="bad">wrong</span> — correct answer: ${data.correct_answer}`;
-  setTimeout(nextItem,900);
+  const delay=data.correct?ANSWER_DELAY_CORRECT_MS:ANSWER_DELAY_WRONG_MS;
+  pendingTimer=setTimeout(nextItem,delay);
 }
 loadDecks();
 </script>
 </body>
 </html>
 """
-
-ADMIN_HTML = """<!doctype html>
+ADMIN_HTML="""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -265,6 +275,11 @@ async function api(path,options={}){
   if(!res.ok){throw new Error(text||res.statusText);}
   return text ? JSON.parse(text) : {};
 }
+async function publicApi(path){
+  const res=await fetch(path);
+  if(!res.ok){const text=await res.text();throw new Error(text||res.statusText);}
+  return res.json();
+}
 async function importDeck(){
   try{
     const name=document.getElementById('deckName').value.trim()||'My vocabulary';
@@ -276,11 +291,6 @@ async function importDeck(){
   }catch(err){
     document.getElementById('result').textContent=`import failed: ${err.message}`;
   }
-}
-async function publicApi(path){
-  const res=await fetch(path);
-  if(!res.ok){const text=await res.text();throw new Error(text||res.statusText);}
-  return res.json();
 }
 async function loadAdminDecks(){
   const data=await publicApi('/api/decks');
@@ -302,6 +312,7 @@ async function loadAdminDecks(){
 }
 async function loadAdminCategories(){
   const deckId=document.getElementById('adminDeckSelect').value;
+  if(!deckId)return;
   const data=await publicApi(`/api/decks/${deckId}/categories`);
   const select=document.getElementById('adminCategorySelect');
   select.innerHTML='';
@@ -394,106 +405,90 @@ loadDeckSummaries();
 </body>
 </html>
 """
-
 class ImportDeckRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-    text: str = Field(min_length=1)
-
+    name:str=Field(min_length=1,max_length=200)
+    text:str=Field(min_length=1)
 class NextRequest(BaseModel):
-    player_id: str = Field(min_length=1, max_length=200)
-    current_item_id: int | None = None
-    category: str | None = None
-
+    player_id:str=Field(min_length=1,max_length=200)
+    current_item_id:int|None=None
+    category:str|None=None
 class AnswerRequest(BaseModel):
-    player_id: str = Field(min_length=1, max_length=200)
-    item_id: int
-    answer: str
-
+    player_id:str=Field(min_length=1,max_length=200)
+    item_id:int
+    answer:str
 class WeightUpdateRequest(BaseModel):
-    manual_weight: float = Field(ge=0.1, le=20)
-
+    manual_weight:float=Field(ge=0.1,le=20)
 class Settings(BaseModel):
-    wrong_factor: float = 0.6
-    streak_decay: float = 0.08
-    unseen_boost: float = 1.25
-    accuracy_factor: float = 0.8
-    min_weight: float = 0.15
-
-DEFAULT_SETTINGS = Settings()
-
-def now_iso() -> str:
+    wrong_factor:float=0.6
+    streak_decay:float=0.08
+    unseen_boost:float=1.25
+    accuracy_factor:float=0.8
+    min_weight:float=0.15
+DEFAULT_SETTINGS=Settings()
+def now_iso()->str:
     return datetime.now(timezone.utc).isoformat()
-
-def normalize_text(value: str) -> str:
-    return " ".join(value.lower().strip().replace("’", "'").replace("`", "'").translate(str.maketrans("", "", ".!?,;:")).split())
-
-def expand_german_variants(value: str) -> set[str]:
-    forms = {normalize_text(value)}
-    rules = [("ä", ["ae", "a"]), ("ö", ["oe", "o"]), ("ü", ["ue", "u"]), ("ß", ["ss"]), ("ae", ["ä", "a"]), ("oe", ["ö", "o"]), ("ue", ["ü", "u"]), ("ss", ["ß"])]
-    changed = True
+def normalize_text(value:str)->str:
+    return " ".join(value.lower().strip().replace("’","'").replace("`","'").translate(str.maketrans("","", ".!?,;:")).split())
+def expand_german_variants(value:str)->set[str]:
+    forms={normalize_text(value)}
+    rules=[("ä",["ae","a"]),("ö",["oe","o"]),("ü",["ue","u"]),("ß",["ss"]),("ae",["ä","a"]),("oe",["ö","o"]),("ue",["ü","u"]),("ss",["ß"])]
+    changed=True
     while changed:
-        changed = False
-        snapshot = list(forms)
+        changed=False
+        snapshot=list(forms)
         for form in snapshot:
-            for src, repls in rules:
+            for src,repls in rules:
                 if src in form:
                     for repl in repls:
-                        candidate = form.replace(src, repl)
+                        candidate=form.replace(src,repl)
                         if candidate not in forms:
                             forms.add(candidate)
-                            changed = True
+                            changed=True
     return {normalize_text(x) for x in forms}
-
-def split_answers(value: str) -> list[str]:
+def split_answers(value:str)->list[str]:
     return [part.strip() for part in value.split("|") if part.strip()]
-
-def answer_matches(user_answer: str, accepted_answer: str) -> bool:
-    normalized_user = normalize_text(user_answer)
-    return normalized_user in expand_german_variants(accepted_answer)
-
-def parse_line(line: str) -> tuple[str, str, str] | None:
-    line = line.strip()
+def answer_matches(user_answer:str,accepted_answer:str)->bool:
+    return normalize_text(user_answer) in expand_german_variants(accepted_answer)
+def parse_line(line:str)->tuple[str,str,str]|None:
+    line=line.strip()
     if not line:
         return None
     if "\t" in line:
-        parts = [part.strip() for part in line.split("\t")]
-        if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
-            return parts[0], parts[1], "\t".join(parts[2:]).strip()
-        if len(parts) >= 2 and parts[0] and parts[1]:
-            return "General", parts[0], "\t".join(parts[1:]).strip()
+        parts=[part.strip() for part in line.split("\t")]
+        if len(parts)>=3 and parts[0] and parts[1] and parts[2]:
+            return parts[0],parts[1],"\t".join(parts[2:]).strip()
+        if len(parts)>=2 and parts[0] and parts[1]:
+            return "General",parts[0],"\t".join(parts[1:]).strip()
         return None
     if ";" in line:
-        parts = [part.strip() for part in line.split(";")]
-        if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
-            return parts[0], parts[1], ";".join(parts[2:]).strip()
-        if len(parts) >= 2 and parts[0] and parts[1]:
-            return "General", parts[0], ";".join(parts[1:]).strip()
+        parts=[part.strip() for part in line.split(";")]
+        if len(parts)>=3 and parts[0] and parts[1] and parts[2]:
+            return parts[0],parts[1],";".join(parts[2:]).strip()
+        if len(parts)>=2 and parts[0] and parts[1]:
+            return "General",parts[0],";".join(parts[1:]).strip()
         return None
     if "," in line:
-        parts = [part.strip() for part in line.split(",")]
-        if len(parts) >= 3 and parts[0] and parts[1] and parts[2]:
-            return parts[0], parts[1], ",".join(parts[2:]).strip()
-        if len(parts) >= 2 and parts[0] and parts[1]:
-            return "General", parts[0], ",".join(parts[1:]).strip()
+        parts=[part.strip() for part in line.split(",")]
+        if len(parts)>=3 and parts[0] and parts[1] and parts[2]:
+            return parts[0],parts[1],",".join(parts[2:]).strip()
+        if len(parts)>=2 and parts[0] and parts[1]:
+            return "General",parts[0],",".join(parts[1:]).strip()
         return None
     return None
-
 @contextmanager
 def db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn=sqlite3.connect(DB_PATH)
+    conn.row_factory=sqlite3.Row
     conn.execute("pragma foreign_keys = on")
     try:
         yield conn
         conn.commit()
     finally:
         conn.close()
-
-def column_exists(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
-    rows = conn.execute(f"pragma table_info({table_name})").fetchall()
-    return any(row[1] == column_name for row in rows)
-
-def init_db() -> None:
+def column_exists(conn:sqlite3.Connection,table_name:str,column_name:str)->bool:
+    rows=conn.execute(f"pragma table_info({table_name})").fetchall()
+    return any(row[1]==column_name for row in rows)
+def init_db()->None:
     with db() as conn:
         conn.executescript("""
         create table if not exists decks(
@@ -524,197 +519,170 @@ def init_db() -> None:
             primary key(player_id,item_id)
         );
         """)
-        if not column_exists(conn, "items", "category"):
+        if not column_exists(conn,"items","category"):
             conn.execute("alter table items add column category text not null default 'General'")
-        if not column_exists(conn, "player_item_stats", "in_mistake_queue"):
+        if not column_exists(conn,"player_item_stats","in_mistake_queue"):
             conn.execute("alter table player_item_stats add column in_mistake_queue integer not null default 0")
-        if not column_exists(conn, "player_item_stats", "mistake_clear_streak"):
+        if not column_exists(conn,"player_item_stats","mistake_clear_streak"):
             conn.execute("alter table player_item_stats add column mistake_clear_streak integer not null default 0")
         conn.execute("create unique index if not exists idx_items_unique on items(deck_id,category,german,english)")
-
 @app.on_event("startup")
-def on_startup() -> None:
+def on_startup()->None:
     init_db()
-
-def verify_admin_token(x_admin_token: str | None) -> None:
-    if not x_admin_token or x_admin_token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="Admin token required")
-
-def get_or_create_stats(conn: sqlite3.Connection, player_id: str, item_id: int) -> sqlite3.Row:
-    row = conn.execute("select * from player_item_stats where player_id=? and item_id=?", (player_id, item_id)).fetchone()
+def verify_admin_token(x_admin_token:str|None)->None:
+    if not x_admin_token or x_admin_token!=ADMIN_TOKEN:
+        raise HTTPException(status_code=403,detail="Admin token required")
+def get_or_create_stats(conn:sqlite3.Connection,player_id:str,item_id:int)->sqlite3.Row:
+    row=conn.execute("select * from player_item_stats where player_id=? and item_id=?",(player_id,item_id)).fetchone()
     if row:
         return row
-    conn.execute(
-        "insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak) values(?,?,?,?,?,?,?,?,?)",
-        (player_id, item_id, 0, 0, 0, 0, None, 0, 0),
-    )
-    return conn.execute("select * from player_item_stats where player_id=? and item_id=?", (player_id, item_id)).fetchone()
-
-def compute_weight(stat: sqlite3.Row | dict[str, Any], manual_weight: float, settings: Settings = DEFAULT_SETTINGS) -> float:
-    seen = stat["seen"] if isinstance(stat, sqlite3.Row) else stat.get("seen", 0)
-    correct = stat["correct"] if isinstance(stat, sqlite3.Row) else stat.get("correct", 0)
-    wrong = stat["wrong"] if isinstance(stat, sqlite3.Row) else stat.get("wrong", 0)
-    streak = stat["streak"] if isinstance(stat, sqlite3.Row) else stat.get("streak", 0)
-    accuracy = (correct / seen) if seen else 0.0
-    wrong_boost = 1 + (wrong * settings.wrong_factor)
-    streak_penalty = max(settings.min_weight, 1 - (streak * settings.streak_decay))
-    unseen_boost = settings.unseen_boost if seen == 0 else 1.0
-    low_accuracy_boost = 1 + (max(0.0, 1 - accuracy) * settings.accuracy_factor)
-    queue_boost = 1.8 if (stat["in_mistake_queue"] if isinstance(stat, sqlite3.Row) else stat.get("in_mistake_queue", 0)) else 1.0
-    return max(settings.min_weight, manual_weight * wrong_boost * streak_penalty * unseen_boost * low_accuracy_boost * queue_boost)
-
-def fetch_items(conn: sqlite3.Connection, deck_id: int, category: str | None = None) -> list[sqlite3.Row]:
+    conn.execute("insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak) values(?,?,?,?,?,?,?,?,?)",(player_id,item_id,0,0,0,0,None,0,0))
+    return conn.execute("select * from player_item_stats where player_id=? and item_id=?",(player_id,item_id)).fetchone()
+def compute_weight(stat:sqlite3.Row|dict[str,Any],manual_weight:float,settings:Settings=DEFAULT_SETTINGS)->float:
+    seen=stat["seen"] if isinstance(stat,sqlite3.Row) else stat.get("seen",0)
+    correct=stat["correct"] if isinstance(stat,sqlite3.Row) else stat.get("correct",0)
+    wrong=stat["wrong"] if isinstance(stat,sqlite3.Row) else stat.get("wrong",0)
+    streak=stat["streak"] if isinstance(stat,sqlite3.Row) else stat.get("streak",0)
+    accuracy=(correct/seen) if seen else 0.0
+    wrong_boost=1+(wrong*settings.wrong_factor)
+    streak_penalty=max(settings.min_weight,1-(streak*settings.streak_decay))
+    unseen_boost=settings.unseen_boost if seen==0 else 1.0
+    low_accuracy_boost=1+(max(0.0,1-accuracy)*settings.accuracy_factor)
+    queue_boost=1.8 if (stat["in_mistake_queue"] if isinstance(stat,sqlite3.Row) else stat.get("in_mistake_queue",0)) else 1.0
+    return max(settings.min_weight,manual_weight*wrong_boost*streak_penalty*unseen_boost*low_accuracy_boost*queue_boost)
+def fetch_items(conn:sqlite3.Connection,deck_id:int,category:str|None=None)->list[sqlite3.Row]:
     if category:
-        return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? and category=? order by id asc", (deck_id, category)).fetchall()
-    return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? order by category asc,id asc", (deck_id,)).fetchall()
-
-def fetch_candidate_items(conn: sqlite3.Connection, deck_id: int, player_id: str, category: str | None) -> list[sqlite3.Row]:
-    if category == MISTAKES_VALUE:
+        return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? and category=? order by id asc",(deck_id,category)).fetchall()
+    return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? order by category asc,id asc",(deck_id,)).fetchall()
+def fetch_candidate_items(conn:sqlite3.Connection,deck_id:int,player_id:str,category:str|None)->list[sqlite3.Row]:
+    if category==MISTAKES_VALUE:
         return conn.execute("""
             select i.id,i.deck_id,i.category,i.german,i.english,i.manual_weight
             from items i
             join player_item_stats s on s.item_id=i.id
             where i.deck_id=? and s.player_id=? and s.in_mistake_queue=1
             order by i.category asc,i.id asc
-        """, (deck_id, player_id)).fetchall()
-    return fetch_items(conn, deck_id, category)
-
-def weighted_choice(rows: list[sqlite3.Row], stats_by_item: dict[int, sqlite3.Row], exclude_item_id: int | None = None) -> sqlite3.Row:
-    candidates = []
+        """,(deck_id,player_id)).fetchall()
+    return fetch_items(conn,deck_id,category)
+def weighted_choice(rows:list[sqlite3.Row],stats_by_item:dict[int,sqlite3.Row],exclude_item_id:int|None=None)->sqlite3.Row:
+    candidates=[]
     for row in rows:
-        if exclude_item_id is not None and len(rows) > 1 and row["id"] == exclude_item_id:
+        if exclude_item_id is not None and len(rows)>1 and row["id"]==exclude_item_id:
             continue
-        stat = stats_by_item[row["id"]]
-        weight = compute_weight(stat, row["manual_weight"])
-        candidates.append((row, weight))
+        stat=stats_by_item[row["id"]]
+        weight=compute_weight(stat,row["manual_weight"])
+        candidates.append((row,weight))
     if not candidates:
-        raise HTTPException(status_code=400, detail="No items available")
-    total = sum(weight for _, weight in candidates)
-    threshold = random.random() * total
-    running = 0.0
-    for row, weight in candidates:
-        running += weight
-        if running >= threshold:
+        raise HTTPException(status_code=400,detail="No items available")
+    total=sum(weight for _,weight in candidates)
+    threshold=random.random()*total
+    running=0.0
+    for row,weight in candidates:
+        running+=weight
+        if running>=threshold:
             return row
     return candidates[-1][0]
-
-@app.get("/", response_class=HTMLResponse)
-def home() -> str:
+@app.get("/",response_class=HTMLResponse)
+def home()->str:
     return INDEX_HTML
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin_home() -> str:
+@app.get("/admin",response_class=HTMLResponse)
+def admin_home()->str:
     return ADMIN_HTML
-
 @app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
-
+def health()->dict[str,str]:
+    return {"status":"ok","db_path":str(DB_PATH)}
 @app.get("/api/decks")
-def list_decks() -> dict[str, Any]:
+def list_decks()->dict[str,Any]:
     with db() as conn:
-        rows = conn.execute("""
+        rows=conn.execute("""
             select d.id,d.name,d.created_at,count(i.id) as item_count
             from decks d
             left join items i on i.deck_id=d.id
             group by d.id,d.name,d.created_at
             order by d.id desc
         """).fetchall()
-        return {"decks": [dict(row) for row in rows]}
-
+        return {"decks":[dict(row) for row in rows]}
 @app.get("/api/decks/{deck_id}/categories")
-def list_categories(deck_id: int) -> dict[str, Any]:
+def list_categories(deck_id:int)->dict[str,Any]:
     with db() as conn:
-        rows = conn.execute("select distinct category from items where deck_id=? order by category asc", (deck_id,)).fetchall()
-        return {"categories": [row["category"] for row in rows]}
-
+        rows=conn.execute("select distinct category from items where deck_id=? order by category asc",(deck_id,)).fetchall()
+        return {"categories":[row["category"] for row in rows]}
 @app.post("/api/decks/import")
-def import_deck(payload: ImportDeckRequest, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+def import_deck(payload:ImportDeckRequest,x_admin_token:str|None=Header(default=None))->dict[str,Any]:
     verify_admin_token(x_admin_token)
-    parsed = []
+    parsed=[]
     for line in payload.text.splitlines():
-        item = parse_line(line)
+        item=parse_line(line)
         if item:
             parsed.append(item)
     if not parsed:
-        raise HTTPException(status_code=400, detail="No valid lines found")
+        raise HTTPException(status_code=400,detail="No valid lines found")
     with db() as conn:
-        cur = conn.execute("insert into decks(name,created_at) values(?,?)", (payload.name, now_iso()))
-        deck_id = cur.lastrowid
-        categories = set()
-        for category, german, english in parsed:
-            accepted = json.dumps(split_answers(english), ensure_ascii=False)
-            conn.execute(
-                "insert into items(deck_id,category,german,english,accepted_answers,manual_weight,created_at) values(?,?,?,?,?,?,?)",
-                (deck_id, category, german, english, accepted, 1.0, now_iso()),
-            )
+        cur=conn.execute("insert into decks(name,created_at) values(?,?)",(payload.name,now_iso()))
+        deck_id=cur.lastrowid
+        categories=set()
+        for category,german,english in parsed:
+            accepted=json.dumps(split_answers(english),ensure_ascii=False)
+            conn.execute("insert into items(deck_id,category,german,english,accepted_answers,manual_weight,created_at) values(?,?,?,?,?,?,?)",(deck_id,category,german,english,accepted,1.0,now_iso()))
             categories.add(category)
-        return {"deck_id": deck_id, "item_count": len(parsed), "category_count": len(categories)}
-
+        return {"deck_id":deck_id,"item_count":len(parsed),"category_count":len(categories)}
 @app.delete("/api/decks/{deck_id}")
-def delete_deck(deck_id: int, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+def delete_deck(deck_id:int,x_admin_token:str|None=Header(default=None))->dict[str,Any]:
     verify_admin_token(x_admin_token)
     with db() as conn:
-        existing = conn.execute("select id,name from decks where id=?", (deck_id,)).fetchone()
+        existing=conn.execute("select id,name from decks where id=?",(deck_id,)).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Deck not found")
-        conn.execute("delete from decks where id=?", (deck_id,))
-        return {"deleted": True, "deck_id": deck_id, "name": existing["name"]}
-
+            raise HTTPException(status_code=404,detail="Deck not found")
+        conn.execute("delete from decks where id=?",(deck_id,))
+        return {"deleted":True,"deck_id":deck_id,"name":existing["name"]}
 @app.get("/api/decks/{deck_id}/items")
-def list_items(deck_id: int, category: str | None = Query(default=None)) -> dict[str, Any]:
+def list_items(deck_id:int,category:str|None=Query(default=None))->dict[str,Any]:
     with db() as conn:
-        rows = fetch_items(conn, deck_id, category)
-        return {"items": [dict(row) for row in rows]}
-
+        rows=fetch_items(conn,deck_id,category)
+        return {"items":[dict(row) for row in rows]}
 @app.patch("/api/items/{item_id}/weight")
-def update_weight(item_id: int, payload: WeightUpdateRequest, x_admin_token: str | None = Header(default=None)) -> dict[str, Any]:
+def update_weight(item_id:int,payload:WeightUpdateRequest,x_admin_token:str|None=Header(default=None))->dict[str,Any]:
     verify_admin_token(x_admin_token)
     with db() as conn:
-        existing = conn.execute("select id from items where id=?", (item_id,)).fetchone()
+        existing=conn.execute("select id from items where id=?",(item_id,)).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Item not found")
-        conn.execute("update items set manual_weight=? where id=?", (payload.manual_weight, item_id))
-        return {"item_id": item_id, "manual_weight": payload.manual_weight}
-
+            raise HTTPException(status_code=404,detail="Item not found")
+        conn.execute("update items set manual_weight=? where id=?",(payload.manual_weight,item_id))
+        return {"item_id":item_id,"manual_weight":payload.manual_weight}
 @app.post("/api/decks/{deck_id}/next")
-def next_item(deck_id: int, payload: NextRequest) -> dict[str, Any]:
+def next_item(deck_id:int,payload:NextRequest)->dict[str,Any]:
     with db() as conn:
-        rows = fetch_candidate_items(conn, deck_id, payload.player_id, payload.category)
+        rows=fetch_candidate_items(conn,deck_id,payload.player_id,payload.category)
         if not rows:
-            raise HTTPException(status_code=404, detail="Deck selection has no items")
-        stats_by_item = {}
+            raise HTTPException(status_code=404,detail="Deck selection has no items")
+        stats_by_item={}
         for row in rows:
-            stats_by_item[row["id"]] = get_or_create_stats(conn, payload.player_id, row["id"])
-        chosen = weighted_choice(rows, stats_by_item, exclude_item_id=payload.current_item_id)
-        category_label = "mistakes" if payload.category == MISTAKES_VALUE else chosen["category"]
-        return {"item_id": chosen["id"], "category": chosen["category"], "category_label": category_label, "german": chosen["german"]}
-
+            stats_by_item[row["id"]]=get_or_create_stats(conn,payload.player_id,row["id"])
+        chosen=weighted_choice(rows,stats_by_item,exclude_item_id=payload.current_item_id)
+        category_label="mistakes" if payload.category==MISTAKES_VALUE else chosen["category"]
+        return {"item_id":chosen["id"],"category":chosen["category"],"category_label":category_label,"german":chosen["german"]}
 @app.post("/api/decks/{deck_id}/answer")
-def submit_answer(deck_id: int, payload: AnswerRequest) -> dict[str, Any]:
+def submit_answer(deck_id:int,payload:AnswerRequest)->dict[str,Any]:
     with db() as conn:
-        row = conn.execute("select id,deck_id,category,german,english,accepted_answers from items where id=? and deck_id=?", (payload.item_id, deck_id)).fetchone()
+        row=conn.execute("select id,deck_id,category,german,english,accepted_answers from items where id=? and deck_id=?",(payload.item_id,deck_id)).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Item not found")
-        stat = get_or_create_stats(conn, payload.player_id, payload.item_id)
-        accepted = json.loads(row["accepted_answers"])
-        is_correct = any(answer_matches(payload.answer, accepted_answer) for accepted_answer in accepted)
-        seen = stat["seen"] + 1
-        correct = stat["correct"] + (1 if is_correct else 0)
-        wrong = stat["wrong"] + (0 if is_correct else 1)
-        streak = (stat["streak"] + 1) if is_correct else 0
-        last_wrong_at = stat["last_wrong_at"] if is_correct else now_iso()
+            raise HTTPException(status_code=404,detail="Item not found")
+        stat=get_or_create_stats(conn,payload.player_id,payload.item_id)
+        accepted=json.loads(row["accepted_answers"])
+        is_correct=any(answer_matches(payload.answer,accepted_answer) for accepted_answer in accepted)
+        seen=stat["seen"]+1
+        correct=stat["correct"]+(1 if is_correct else 0)
+        wrong=stat["wrong"]+(0 if is_correct else 1)
+        streak=(stat["streak"]+1) if is_correct else 0
+        last_wrong_at=stat["last_wrong_at"] if is_correct else now_iso()
         if is_correct:
-            in_mistake_queue = stat["in_mistake_queue"]
-            mistake_clear_streak = (stat["mistake_clear_streak"] + 1) if stat["in_mistake_queue"] else 0
-            if in_mistake_queue and mistake_clear_streak >= 2:
-                in_mistake_queue = 0
-                mistake_clear_streak = 0
+            in_mistake_queue=stat["in_mistake_queue"]
+            mistake_clear_streak=(stat["mistake_clear_streak"]+1) if stat["in_mistake_queue"] else 0
+            if in_mistake_queue and mistake_clear_streak>=2:
+                in_mistake_queue=0
+                mistake_clear_streak=0
         else:
-            in_mistake_queue = 1
-            mistake_clear_streak = 0
-        conn.execute(
-            "update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=?,in_mistake_queue=?,mistake_clear_streak=? where player_id=? and item_id=?",
-            (seen, correct, wrong, streak, last_wrong_at, in_mistake_queue, mistake_clear_streak, payload.player_id, payload.item_id),
-        )
-        return {"correct": is_correct, "correct_answer": row["english"], "category": row["category"], "queued_for_review": bool(in_mistake_queue)}
+            in_mistake_queue=1
+            mistake_clear_streak=0
+        conn.execute("update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=?,in_mistake_queue=?,mistake_clear_streak=? where player_id=? and item_id=?",(seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak,payload.player_id,payload.item_id))
+        return {"correct":is_correct,"correct_answer":row["english"],"category":row["category"],"queued_for_review":bool(in_mistake_queue)}
