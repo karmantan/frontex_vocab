@@ -3,7 +3,6 @@ import json
 import os
 import random
 import sqlite3
-import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,15 +11,12 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
-
 BASE_DIR=Path(__file__).resolve().parent
 DB_PATH=BASE_DIR/"vocab_quiz.db"
 ADMIN_TOKEN=os.getenv("ADMIN_TOKEN","change-me")
 MISTAKES_VALUE="__mistakes__"
-
-app=FastAPI(title="Frontex Vocab Quiz API",version="3.3.0")
+app=FastAPI(title="Frontex Vocab Quiz API",version="3.2.0")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
-
 INDEX_HTML="""<!doctype html>
 <html>
 <head>
@@ -35,7 +31,6 @@ input,select{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:12px
 button{padding:12px 16px;border:0;border-radius:12px;background:#0f172a;color:#fff;cursor:pointer}
 button.secondary{background:#e2e8f0;color:#0f172a}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.row3{display:grid;grid-template-columns:1fr 1fr 180px;gap:12px}
 .small{font-size:14px;color:#475569}
 .good{color:#15803d;font-weight:700}
 .bad{color:#b91c1c;font-weight:700}
@@ -44,15 +39,6 @@ button.secondary{background:#e2e8f0;color:#0f172a}
 </head>
 <body>
 <h1>Frontex Vocab Quiz</h1>
-<div class="card">
-<h2>Profile</h2>
-<div class="row3">
-<select id="profileSelect"></select>
-<input id="newProfileName" placeholder="new profile name">
-<button onclick="createProfile()">create profile</button>
-</div>
-<p class="small" id="profileInfo"></p>
-</div>
 <div class="card">
 <h2>Deck and category</h2>
 <div class="row">
@@ -75,10 +61,11 @@ button.secondary{background:#e2e8f0;color:#0f172a}
 </div>
 <p id="feedback" style="margin-top:12px"></p>
 </div>
-<p id="quizEmpty" class="small">create or choose a profile first.</p>
+<p id="quizEmpty" class="small">no public deck available yet.</p>
 </div>
 <script>
-let currentProfileId=localStorage.getItem('profile_id')||'';
+const playerId=localStorage.getItem('player_id')||crypto.randomUUID();
+localStorage.setItem('player_id',playerId);
 const ANSWER_DELAY_CORRECT_MS=1200;
 const ANSWER_DELAY_WRONG_MS=5000;
 let currentDeckId=null;
@@ -89,12 +76,6 @@ async function api(path,options={}){
   if(!res.ok){const text=await res.text();throw new Error(text||res.statusText);}
   return res.json();
 }
-function clearPendingTimer(){
-  if(pendingTimer){
-    clearTimeout(pendingTimer);
-    pendingTimer=null;
-  }
-}
 function currentCategoryValue(){
   const value=document.getElementById('categorySelect').value;
   return value||'';
@@ -103,99 +84,13 @@ function categoryPayloadValue(){
   const value=currentCategoryValue();
   return value||null;
 }
-function selectedProfileName(){
-  const select=document.getElementById('profileSelect');
-  const opt=select.options[select.selectedIndex];
-  return opt?opt.textContent:'';
-}
-function updateProfileInfo(){
-  const info=document.getElementById('profileInfo');
-  if(currentProfileId){
-    info.textContent=`current profile: ${selectedProfileName()}`;
-  }else{
-    info.textContent='Choose an existing profile or create a new one to save progress.';
+function clearPendingTimer(){
+  if(pendingTimer){
+    clearTimeout(pendingTimer);
+    pendingTimer=null;
   }
 }
-function setQuizAvailability(enabled,message){
-  document.getElementById('quizBox').classList.toggle('hidden',!enabled);
-  document.getElementById('quizEmpty').classList.toggle('hidden',enabled);
-  if(!enabled && message){
-    document.getElementById('quizEmpty').textContent=message;
-  }
-}
-async function loadProfiles(){
-  const data=await api('/api/profiles');
-  const select=document.getElementById('profileSelect');
-  const previous=currentProfileId;
-  select.innerHTML='';
-  const placeholder=document.createElement('option');
-  placeholder.value='';
-  placeholder.textContent='Select a profile';
-  select.appendChild(placeholder);
-  for(const profile of data.profiles){
-    const opt=document.createElement('option');
-    opt.value=profile.id;
-    opt.textContent=profile.name;
-    select.appendChild(opt);
-  }
-  if([...select.options].some(x=>x.value===previous)){
-    select.value=previous;
-    currentProfileId=previous;
-  }else{
-    select.value='';
-    currentProfileId='';
-    localStorage.removeItem('profile_id');
-  }
-  updateProfileInfo();
-  await loadDecks();
-}
-async function createProfile(){
-  const input=document.getElementById('newProfileName');
-  const name=input.value.trim();
-  if(!name)return;
-  try{
-    const data=await api('/api/profiles',{method:'POST',body:JSON.stringify({name})});
-    currentProfileId=data.profile.id;
-    localStorage.setItem('profile_id',currentProfileId);
-    input.value='';
-    await loadProfiles();
-    document.getElementById('profileSelect').value=currentProfileId;
-    updateProfileInfo();
-    await loadDecks();
-  }catch(err){
-    alert(`profile creation failed: ${err.message}`);
-  }
-}
-document.getElementById('profileSelect').addEventListener('change',async(e)=>{
-  clearPendingTimer();
-  currentProfileId=e.target.value;
-  if(currentProfileId){
-    localStorage.setItem('profile_id',currentProfileId);
-  }else{
-    localStorage.removeItem('profile_id');
-  }
-  updateProfileInfo();
-  await loadDecks();
-});
-document.getElementById('deckSelect').addEventListener('change',async(e)=>{
-  clearPendingTimer();
-  currentDeckId=e.target.value;
-  await loadCategories();
-  await nextItem();
-});
-document.getElementById('categorySelect').addEventListener('change',async()=>{
-  clearPendingTimer();
-  updateCategoryLabel();
-  await nextItem();
-});
 async function loadDecks(){
-  if(!currentProfileId){
-    document.getElementById('deckSelect').innerHTML='';
-    document.getElementById('categorySelect').innerHTML='';
-    document.getElementById('deckInfo').textContent='';
-    setQuizAvailability(false,'Create or choose a profile first.');
-    return;
-  }
   const data=await api('/api/decks');
   const deckSelect=document.getElementById('deckSelect');
   deckSelect.innerHTML='';
@@ -207,13 +102,15 @@ async function loadDecks(){
   }
   if(data.decks.length){
     currentDeckId=deckSelect.value;
-    document.getElementById('deckInfo').textContent=`profile: ${selectedProfileName()}`;
-    setQuizAvailability(true);
+    document.getElementById('deckInfo').textContent=`player id: ${playerId}`;
+    document.getElementById('quizBox').classList.remove('hidden');
+    document.getElementById('quizEmpty').classList.add('hidden');
     await loadCategories();
     await nextItem();
   }else{
     document.getElementById('deckInfo').textContent='';
-    setQuizAvailability(false,'No decks are available yet.');
+    document.getElementById('quizBox').classList.add('hidden');
+    document.getElementById('quizEmpty').classList.remove('hidden');
   }
 }
 async function loadCategories(){
@@ -250,11 +147,22 @@ function updateCategoryLabel(){
     label.textContent='category: all';
   }
 }
+document.getElementById('deckSelect').addEventListener('change',async(e)=>{
+  clearPendingTimer();
+  currentDeckId=e.target.value;
+  await loadCategories();
+  await nextItem();
+});
+document.getElementById('categorySelect').addEventListener('change',async()=>{
+  clearPendingTimer();
+  updateCategoryLabel();
+  await nextItem();
+});
 async function nextItem(){
   clearPendingTimer();
-  if(!currentDeckId||!currentProfileId)return;
+  if(!currentDeckId)return;
   try{
-    const data=await api(`/api/decks/${currentDeckId}/next`,{method:'POST',body:JSON.stringify({profile_id:currentProfileId,current_item_id:currentItem?.item_id||null,category:categoryPayloadValue()})});
+    const data=await api(`/api/decks/${currentDeckId}/next`,{method:'POST',body:JSON.stringify({player_id:playerId,current_item_id:currentItem?.item_id||null,category:categoryPayloadValue()})});
     currentItem=data;
     document.getElementById('prompt').textContent=data.german;
     document.getElementById('answer').value='';
@@ -272,15 +180,15 @@ async function nextItem(){
   }
 }
 async function submitAnswer(){
-  if(!currentDeckId||!currentItem||!currentProfileId)return;
+  if(!currentDeckId||!currentItem)return;
   clearPendingTimer();
   const answer=document.getElementById('answer').value;
-  const data=await api(`/api/decks/${currentDeckId}/answer`,{method:'POST',body:JSON.stringify({profile_id:currentProfileId,item_id:currentItem.item_id,answer})});
+  const data=await api(`/api/decks/${currentDeckId}/answer`,{method:'POST',body:JSON.stringify({player_id:playerId,item_id:currentItem.item_id,answer})});
   document.getElementById('feedback').innerHTML=data.correct?`<span class="good">correct</span>`:`<span class="bad">wrong</span> — correct answer: ${data.correct_answer}`;
   const delay=data.correct?ANSWER_DELAY_CORRECT_MS:ANSWER_DELAY_WRONG_MS;
   pendingTimer=setTimeout(nextItem,delay);
 }
-loadProfiles();
+loadDecks();
 </script>
 </body>
 </html>
@@ -497,17 +405,15 @@ loadDeckSummaries();
 </body>
 </html>
 """
-class CreateProfileRequest(BaseModel):
-    name:str=Field(min_length=1,max_length=80)
 class ImportDeckRequest(BaseModel):
     name:str=Field(min_length=1,max_length=200)
     text:str=Field(min_length=1)
 class NextRequest(BaseModel):
-    profile_id:str=Field(min_length=1,max_length=200)
+    player_id:str=Field(min_length=1,max_length=200)
     current_item_id:int|None=None
     category:str|None=None
 class AnswerRequest(BaseModel):
-    profile_id:str=Field(min_length=1,max_length=200)
+    player_id:str=Field(min_length=1,max_length=200)
     item_id:int
     answer:str
 class WeightUpdateRequest(BaseModel):
@@ -585,11 +491,6 @@ def column_exists(conn:sqlite3.Connection,table_name:str,column_name:str)->bool:
 def init_db()->None:
     with db() as conn:
         conn.executescript("""
-        create table if not exists profiles(
-            id text primary key,
-            name text not null unique,
-            created_at text not null
-        );
         create table if not exists decks(
             id integer primary key autoincrement,
             name text not null,
@@ -631,16 +532,12 @@ def on_startup()->None:
 def verify_admin_token(x_admin_token:str|None)->None:
     if not x_admin_token or x_admin_token!=ADMIN_TOKEN:
         raise HTTPException(status_code=403,detail="Admin token required")
-def ensure_profile_exists(conn:sqlite3.Connection,profile_id:str)->None:
-    row=conn.execute("select id from profiles where id=?",(profile_id,)).fetchone()
-    if not row:
-        raise HTTPException(status_code=404,detail="Profile not found")
-def get_or_create_stats(conn:sqlite3.Connection,profile_id:str,item_id:int)->sqlite3.Row:
-    row=conn.execute("select * from player_item_stats where player_id=? and item_id=?",(profile_id,item_id)).fetchone()
+def get_or_create_stats(conn:sqlite3.Connection,player_id:str,item_id:int)->sqlite3.Row:
+    row=conn.execute("select * from player_item_stats where player_id=? and item_id=?",(player_id,item_id)).fetchone()
     if row:
         return row
-    conn.execute("insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak) values(?,?,?,?,?,?,?,?,?)",(profile_id,item_id,0,0,0,0,None,0,0))
-    return conn.execute("select * from player_item_stats where player_id=? and item_id=?",(profile_id,item_id)).fetchone()
+    conn.execute("insert into player_item_stats(player_id,item_id,seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak) values(?,?,?,?,?,?,?,?,?)",(player_id,item_id,0,0,0,0,None,0,0))
+    return conn.execute("select * from player_item_stats where player_id=? and item_id=?",(player_id,item_id)).fetchone()
 def compute_weight(stat:sqlite3.Row|dict[str,Any],manual_weight:float,settings:Settings=DEFAULT_SETTINGS)->float:
     seen=stat["seen"] if isinstance(stat,sqlite3.Row) else stat.get("seen",0)
     correct=stat["correct"] if isinstance(stat,sqlite3.Row) else stat.get("correct",0)
@@ -657,7 +554,7 @@ def fetch_items(conn:sqlite3.Connection,deck_id:int,category:str|None=None)->lis
     if category:
         return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? and category=? order by id asc",(deck_id,category)).fetchall()
     return conn.execute("select id,deck_id,category,german,english,manual_weight from items where deck_id=? order by category asc,id asc",(deck_id,)).fetchall()
-def fetch_candidate_items(conn:sqlite3.Connection,deck_id:int,profile_id:str,category:str|None)->list[sqlite3.Row]:
+def fetch_candidate_items(conn:sqlite3.Connection,deck_id:int,player_id:str,category:str|None)->list[sqlite3.Row]:
     if category==MISTAKES_VALUE:
         return conn.execute("""
             select i.id,i.deck_id,i.category,i.german,i.english,i.manual_weight
@@ -665,7 +562,7 @@ def fetch_candidate_items(conn:sqlite3.Connection,deck_id:int,profile_id:str,cat
             join player_item_stats s on s.item_id=i.id
             where i.deck_id=? and s.player_id=? and s.in_mistake_queue=1
             order by i.category asc,i.id asc
-        """,(deck_id,profile_id)).fetchall()
+        """,(deck_id,player_id)).fetchall()
     return fetch_items(conn,deck_id,category)
 def weighted_choice(rows:list[sqlite3.Row],stats_by_item:dict[int,sqlite3.Row],exclude_item_id:int|None=None)->sqlite3.Row:
     candidates=[]
@@ -694,22 +591,6 @@ def admin_home()->str:
 @app.get("/api/health")
 def health()->dict[str,str]:
     return {"status":"ok","db_path":str(DB_PATH)}
-@app.get("/api/profiles")
-def list_profiles()->dict[str,Any]:
-    with db() as conn:
-        rows=conn.execute("select id,name,created_at from profiles order by lower(name) asc, created_at asc").fetchall()
-        return {"profiles":[dict(row) for row in rows]}
-@app.post("/api/profiles")
-def create_profile(payload:CreateProfileRequest)->dict[str,Any]:
-    profile_id=uuid.uuid4().hex
-    name=payload.name.strip()
-    with db() as conn:
-        existing=conn.execute("select id from profiles where lower(name)=lower(?)",(name,)).fetchone()
-        if existing:
-            raise HTTPException(status_code=409,detail="Profile name already exists")
-        conn.execute("insert into profiles(id,name,created_at) values(?,?,?)",(profile_id,name,now_iso()))
-        profile=conn.execute("select id,name,created_at from profiles where id=?",(profile_id,)).fetchone()
-        return {"profile":dict(profile)}
 @app.get("/api/decks")
 def list_decks()->dict[str,Any]:
     with db() as conn:
@@ -771,24 +652,22 @@ def update_weight(item_id:int,payload:WeightUpdateRequest,x_admin_token:str|None
 @app.post("/api/decks/{deck_id}/next")
 def next_item(deck_id:int,payload:NextRequest)->dict[str,Any]:
     with db() as conn:
-        ensure_profile_exists(conn,payload.profile_id)
-        rows=fetch_candidate_items(conn,deck_id,payload.profile_id,payload.category)
+        rows=fetch_candidate_items(conn,deck_id,payload.player_id,payload.category)
         if not rows:
             raise HTTPException(status_code=404,detail="Deck selection has no items")
         stats_by_item={}
         for row in rows:
-            stats_by_item[row["id"]]=get_or_create_stats(conn,payload.profile_id,row["id"])
+            stats_by_item[row["id"]]=get_or_create_stats(conn,payload.player_id,row["id"])
         chosen=weighted_choice(rows,stats_by_item,exclude_item_id=payload.current_item_id)
         category_label="mistakes" if payload.category==MISTAKES_VALUE else chosen["category"]
         return {"item_id":chosen["id"],"category":chosen["category"],"category_label":category_label,"german":chosen["german"]}
 @app.post("/api/decks/{deck_id}/answer")
 def submit_answer(deck_id:int,payload:AnswerRequest)->dict[str,Any]:
     with db() as conn:
-        ensure_profile_exists(conn,payload.profile_id)
         row=conn.execute("select id,deck_id,category,german,english,accepted_answers from items where id=? and deck_id=?",(payload.item_id,deck_id)).fetchone()
         if not row:
             raise HTTPException(status_code=404,detail="Item not found")
-        stat=get_or_create_stats(conn,payload.profile_id,payload.item_id)
+        stat=get_or_create_stats(conn,payload.player_id,payload.item_id)
         accepted=json.loads(row["accepted_answers"])
         is_correct=any(answer_matches(payload.answer,accepted_answer) for accepted_answer in accepted)
         seen=stat["seen"]+1
@@ -805,5 +684,5 @@ def submit_answer(deck_id:int,payload:AnswerRequest)->dict[str,Any]:
         else:
             in_mistake_queue=1
             mistake_clear_streak=0
-        conn.execute("update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=?,in_mistake_queue=?,mistake_clear_streak=? where player_id=? and item_id=?",(seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak,payload.profile_id,payload.item_id))
+        conn.execute("update player_item_stats set seen=?,correct=?,wrong=?,streak=?,last_wrong_at=?,in_mistake_queue=?,mistake_clear_streak=? where player_id=? and item_id=?",(seen,correct,wrong,streak,last_wrong_at,in_mistake_queue,mistake_clear_streak,payload.player_id,payload.item_id))
         return {"correct":is_correct,"correct_answer":row["english"],"category":row["category"],"queued_for_review":bool(in_mistake_queue)}
